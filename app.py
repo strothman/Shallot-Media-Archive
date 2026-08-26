@@ -13,7 +13,7 @@ import urllib.request
 
 import customtkinter as ctk
 from PIL import Image
-from spotify_sync import SpotifyFetcher, SpotifyPlexampPipeline, PlexampTagger
+from spotify_sync import SpotifyFetcher, SpotifyPlexampPipeline
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
 base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -2077,8 +2077,9 @@ class DownloaderApp(ctk.CTk):
                 self.spotify_collection = collection
                 self.after(0, lambda: self.display_spotify_collection(collection))
             except Exception as e:
-                self.log(f"Spotify fetch error: {e}", is_error=True)
-                self.after(0, lambda: self.show_spotify_fetch_error(str(e)))
+                err_msg = str(e)
+                self.log(f"Spotify fetch error: {err_msg}", is_error=True)
+                self.after(0, lambda msg=err_msg: self.show_spotify_fetch_error(msg))
             finally:
                 self.after(0, lambda: self.btn_spotify_fetch.configure(state="normal", text="⚡ Fetch Tracks"))
 

@@ -6,7 +6,6 @@ and rich Plexamp-compatible metadata tagging (ID3v2 / FLAC / MP4) with Mutagen.
 
 import os
 import re
-import sys
 import json
 import ssl
 import shutil
@@ -17,7 +16,6 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Callable
 
-import mutagen
 from mutagen.id3 import (
     ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, APIC, TCMP, ID3NoHeaderError
 )

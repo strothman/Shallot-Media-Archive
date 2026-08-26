@@ -14,7 +14,7 @@ import urllib.request
 import customtkinter as ctk
 from PIL import Image
 import pystray
-from spotify_sync import SpotifyFetcher, SpotifyPlexampPipeline
+from spotify_sync import SpotifyAuthHelper, SpotifyFetcher, SpotifyPlexampPipeline
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
 base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -1068,6 +1068,29 @@ class DownloaderApp(ctk.CTk):
         self.spotify_csec_entry.bind("<FocusOut>", lambda e: self.save_setting("spotify_client_secret", self.spotify_csec_entry.get().strip()))
         self.theme_entries.append(self.spotify_csec_entry)
 
+        # 1-Click Spotify Authorization Row
+        sp_auth_row = ctk.CTkFrame(self.spotify_settings_card, fg_color="transparent")
+        sp_auth_row.pack(fill="x", padx=15, pady=(8, 12))
+
+        self.btn_spotify_auth = ctk.CTkButton(
+            sp_auth_row,
+            text="🔗 Connect Spotify (Unlocks 700+ Songs)",
+            height=32,
+            font=("Segoe UI", 11, "bold"),
+            command=self.authenticate_spotify_account
+        )
+        self.btn_spotify_auth.pack(side="left", padx=(0, 10))
+        self.theme_buttons_secondary.append(self.btn_spotify_auth)
+
+        has_tok = bool(self.saved_settings.get("spotify_refresh_token"))
+        self.lbl_spotify_auth_status = ctk.CTkLabel(
+            sp_auth_row,
+            text="✓ Spotify Connected (All 700+ Songs Unlocked)" if has_tok else "Status: Click to authorize in browser",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#4ADE80" if has_tok else "#78909C"
+        )
+        self.lbl_spotify_auth_status.pack(side="left")
+
         # Tools Card (Upload Cookies, Update Engine, Open Error Log)
         self.tools_card = ctk.CTkFrame(self.settings_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
         self.tools_card.pack(fill="x", padx=20, pady=6)
@@ -2082,6 +2105,34 @@ class DownloaderApp(ctk.CTk):
             self.spotify_folder_input.insert(0, selected_dir)
             self.save_setting("plex_music_folder", selected_dir)
 
+    def authenticate_spotify_account(self):
+        """Launches 1-click browser authorization for Spotify Web API to unlock 700+ songs."""
+        cid = self.spotify_cid_entry.get().strip() or self.saved_settings.get("spotify_client_id", "")
+        csec = self.spotify_csec_entry.get().strip() or self.saved_settings.get("spotify_client_secret", "")
+        if not cid or not csec:
+            self.lbl_spotify_auth_status.configure(text="Please enter Client ID & Secret first", text_color="#FB7185")
+            return
+
+        self.save_setting("spotify_client_id", cid)
+        self.save_setting("spotify_client_secret", csec)
+        self.btn_spotify_auth.configure(state="disabled", text="Connecting in Browser... ⏳")
+        self.lbl_spotify_auth_status.configure(text="Waiting for browser approval...", text_color="#38BDF8")
+
+        def on_done(refresh_tok, error):
+            if refresh_tok:
+                self.save_setting("spotify_refresh_token", refresh_tok)
+                self.after(0, lambda: self.lbl_spotify_auth_status.configure(text="✓ Spotify Connected (All 700+ Songs Unlocked)", text_color="#4ADE80"))
+                self.after(0, lambda: self.btn_spotify_auth.configure(state="normal", text="✓ Re-Authorize Account"))
+                self.log("SUCCESS: Spotify Account authorized! Unlimited playlist size unlocked.")
+                if self.spotify_url_input.get().strip():
+                    self.after(500, self.fetch_spotify_playlist)
+            else:
+                self.after(0, lambda: self.lbl_spotify_auth_status.configure(text=f"Auth Error: {str(error)[:40]}", text_color="#FB7185"))
+                self.after(0, lambda: self.btn_spotify_auth.configure(state="normal", text="🔗 Connect Spotify"))
+                self.log(f"Spotify auth failed: {error}", is_error=True)
+
+        SpotifyAuthHelper.authorize_in_browser(cid, csec, on_done)
+
     def fetch_spotify_playlist(self):
         """ Fetches metadata and tracklist for the entered Spotify link in a worker thread """
         url = self.spotify_url_input.get().strip()
@@ -2095,7 +2146,8 @@ class DownloaderApp(ctk.CTk):
         def run_fetch():
             cid = self.saved_settings.get("spotify_client_id", "")
             csec = self.saved_settings.get("spotify_client_secret", "")
-            fetcher = SpotifyFetcher(client_id=cid, client_secret=csec)
+            rtok = self.saved_settings.get("spotify_refresh_token", "")
+            fetcher = SpotifyFetcher(client_id=cid, client_secret=csec, refresh_token=rtok)
 
             try:
                 collection = fetcher.fetch_entity(url)

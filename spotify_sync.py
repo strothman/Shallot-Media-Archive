@@ -38,11 +38,12 @@ def sanitize_filename(name: str, max_len: int = 120) -> str:
 
 
 class SpotifyFetcher:
-    """Fetches Spotify metadata via Embed scraping or official Web API."""
+    """Fetches Spotify metadata via Embed scraping, User Auth, or Web API."""
 
-    def __init__(self, client_id: str = "", client_secret: str = ""):
+    def __init__(self, client_id: str = "", client_secret: str = "", refresh_token: str = ""):
         self.client_id = client_id.strip()
         self.client_secret = client_secret.strip()
+        self.refresh_token = refresh_token.strip()
         self._api_token: Optional[str] = None
         self._ssl_ctx = ssl.create_default_context()
         self._ssl_ctx.check_hostname = False
@@ -68,7 +69,7 @@ class SpotifyFetcher:
         return None, None
 
     def _get_api_token(self) -> Optional[str]:
-        """Obtains an OAuth Bearer token using Client Credentials flow if configured."""
+        """Obtains an OAuth Bearer token using Refresh Token (preferred) or Client Credentials flow."""
         if not self.client_id or not self.client_secret:
             return None
         if self._api_token:
@@ -77,9 +78,18 @@ class SpotifyFetcher:
         try:
             auth_str = f"{self.client_id}:{self.client_secret}"
             b64_auth = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
+            
+            if self.refresh_token:
+                payload = {
+                    "grant_type": "refresh_token",
+                    "refresh_token": self.refresh_token
+                }
+            else:
+                payload = {"grant_type": "client_credentials"}
+
             req = urllib.request.Request(
                 "https://accounts.spotify.com/api/token",
-                data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode('utf-8'),
+                data=urllib.parse.urlencode(payload).encode('utf-8'),
                 headers={
                     "Authorization": f"Basic {b64_auth}",
                     "Content-Type": "application/x-www-form-urlencoded"
@@ -92,6 +102,95 @@ class SpotifyFetcher:
         except Exception as e:
             print(f"[SpotifyFetcher] API Token acquisition failed: {e}")
             return None
+
+
+class SpotifyAuthHelper:
+    """Handles 1-click Spotify OAuth authorization server to unlock unlimited playlist sizes."""
+
+    @staticmethod
+    def get_auth_url(client_id: str, redirect_uri: str = "http://127.0.0.1:8888/callback") -> str:
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": "playlist-read-private playlist-read-collaborative user-library-read"
+        }
+        return "https://accounts.spotify.com/authorize?" + urllib.parse.urlencode(params)
+
+    @staticmethod
+    def authorize_in_browser(client_id: str, client_secret: str, callback_fn):
+        """Spawns a local one-shot HTTP server, opens browser for authorization, and calls callback_fn(refresh_token, error)."""
+        import http.server
+        import webbrowser
+
+        redirect_uri = "http://127.0.0.1:8888/callback"
+        auth_code_container = {"code": None, "error": None}
+
+        class CallbackHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                query = urllib.parse.urlparse(self.path).query
+                params = urllib.parse.parse_qs(query)
+                if "code" in params:
+                    auth_code_container["code"] = params["code"][0]
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    html = """<html><head><title>Spotify Connected</title></head>
+                    <body style="background:#0D0D12;color:#10B981;font-family:Segoe UI,sans-serif;text-align:center;padding-top:60px;">
+                        <h1 style="font-size:28px;">&#10003; Spotify Connected Successfully!</h1>
+                        <p style="color:#EEEEF2;font-size:16px;">All 722+ track playlists are now unlocked in Shallot Media Archive.</p>
+                        <p style="color:#78909C;font-size:13px;">You can close this browser tab now.</p>
+                    </body></html>"""
+                    self.wfile.write(html.encode("utf-8"))
+                else:
+                    auth_code_container["error"] = params.get("error", ["Unknown error"])[0]
+                    self.send_response(400)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        def run_server():
+            try:
+                server = http.server.HTTPServer(("127.0.0.1", 8888), CallbackHandler)
+                server.timeout = 120
+                auth_url = SpotifyAuthHelper.get_auth_url(client_id, redirect_uri)
+                webbrowser.open(auth_url)
+                
+                # Handle single request
+                server.handle_request()
+                server.server_close()
+
+                if auth_code_container["code"]:
+                    # Exchange code for tokens
+                    auth_str = f"{client_id}:{client_secret}"
+                    b64_auth = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
+                    data = urllib.parse.urlencode({
+                        "grant_type": "authorization_code",
+                        "code": auth_code_container["code"],
+                        "redirect_uri": redirect_uri
+                    }).encode('utf-8')
+                    req = urllib.request.Request(
+                        "https://accounts.spotify.com/api/token",
+                        data=data,
+                        headers={
+                            "Authorization": f"Basic {b64_auth}",
+                            "Content-Type": "application/x-www-form-urlencoded"
+                        }
+                    )
+                    ssl_ctx = ssl.create_default_context()
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
+                    with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
+                        tok_data = json.loads(resp.read().decode('utf-8'))
+                        refresh_tok = tok_data.get("refresh_token")
+                        callback_fn(refresh_tok, None)
+                else:
+                    callback_fn(None, auth_code_container.get("error") or "Authorization timed out or was cancelled.")
+            except Exception as e:
+                callback_fn(None, str(e))
+
+        threading.Thread(target=run_server, daemon=True).start()
 
     def fetch_entity(self, url_or_uri: str) -> Dict:
         """

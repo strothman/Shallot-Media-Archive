@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- support Spotify 2026 /items endpoint for unlimited playlist track pagination (bfafde7)
+
+### Fixed
 - position SpotifyFetcher fetch_entity method properly (d6d2a73)
 
 ### Added

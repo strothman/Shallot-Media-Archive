@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- add minimize to system tray on window close with right-click exit menu (8aa9f64)
+
+### Added
 - add synced lyrics, ReplayGain, concurrent downloading, duplicate detection, Inno installer, and release CI (3c20202)
 - embed original album track numbers and display original track index in UI (818dd1b)
 - resolve true original studio albums and high-res artwork for all tracks (c1c90f9)

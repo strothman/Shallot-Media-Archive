@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- apply Plexamp Artist/Album/XX-Title naming hierarchy to Universal Downloader audio mode (1e4fc10)
+
+### Added
 - add minimize to system tray on window close with right-click exit menu (8aa9f64)
 
 ### Added

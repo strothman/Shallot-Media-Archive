@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- auto-save target directories to settings.json on typing, paste, browse, or focus loss (fce31d8)
+
+### Changed
+- chore: add settings.json to gitignore (46b649a)
+
 ### Fixed
 - launch run.bat silently with pythonw and auto-close console prompt (c0e6a47)
 

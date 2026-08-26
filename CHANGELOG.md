@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- add synced lyrics, ReplayGain, concurrent downloading, duplicate detection, Inno installer, and release CI (3c20202)
+- embed original album track numbers and display original track index in UI (818dd1b)
+- resolve true original studio albums and high-res artwork for all tracks (c1c90f9)
+- add real-time track status badges, update yt-dlp downloader configuration, and include launcher scripts (6491579)
+- implement per-track status badges, add automated batch execution scripts, and update configuration settings. (4354f53)
+- implement Spotify metadata fetcher with support for playlist, album, and track parsing (da9c4de)
+- initialize util-SMArchive standalone repository (5f6c813)
+
+### Fixed
+- make batch and vbs launchers robust with absolute pathing (6b551a1)
+
+### Changed
+- chore: rename application to Shallot Media Archive (b3c45bc)
+- docs: add comprehensive README, CHANGELOG, and automated daily docs workflow (93ae246)
+
+---
+
 ## [1.2.0] - 2026-08-26
 
 ### Changed

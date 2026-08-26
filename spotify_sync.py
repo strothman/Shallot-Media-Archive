@@ -37,73 +37,6 @@ def sanitize_filename(name: str, max_len: int = 120) -> str:
     return clean[:max_len]
 
 
-class SpotifyFetcher:
-    """Fetches Spotify metadata via Embed scraping, User Auth, or Web API."""
-
-    def __init__(self, client_id: str = "", client_secret: str = "", refresh_token: str = ""):
-        self.client_id = client_id.strip()
-        self.client_secret = client_secret.strip()
-        self.refresh_token = refresh_token.strip()
-        self._api_token: Optional[str] = None
-        self._ssl_ctx = ssl.create_default_context()
-        self._ssl_ctx.check_hostname = False
-        self._ssl_ctx.verify_mode = ssl.CERT_NONE
-
-    @staticmethod
-    def parse_spotify_url(url_or_uri: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Parses Spotify URL or URI into (entity_type, entity_id).
-        Supports: playlist, album, track.
-        """
-        text = url_or_uri.strip()
-        # URI format: spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
-        uri_match = re.match(r'spotify:(playlist|album|track):([a-zA-Z0-9]+)', text)
-        if uri_match:
-            return uri_match.group(1), uri_match.group(2)
-
-        # URL format: https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?...
-        url_match = re.search(r'open\.spotify\.com/(playlist|album|track)/([a-zA-Z0-9]+)', text)
-        if url_match:
-            return url_match.group(1), url_match.group(2)
-
-        return None, None
-
-    def _get_api_token(self) -> Optional[str]:
-        """Obtains an OAuth Bearer token using Refresh Token (preferred) or Client Credentials flow."""
-        if not self.client_id or not self.client_secret:
-            return None
-        if self._api_token:
-            return self._api_token
-
-        try:
-            auth_str = f"{self.client_id}:{self.client_secret}"
-            b64_auth = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
-            
-            if self.refresh_token:
-                payload = {
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token
-                }
-            else:
-                payload = {"grant_type": "client_credentials"}
-
-            req = urllib.request.Request(
-                "https://accounts.spotify.com/api/token",
-                data=urllib.parse.urlencode(payload).encode('utf-8'),
-                headers={
-                    "Authorization": f"Basic {b64_auth}",
-                    "Content-Type": "application/x-www-form-urlencoded"
-                }
-            )
-            with urllib.request.urlopen(req, context=self._ssl_ctx, timeout=10) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                self._api_token = data.get("access_token")
-                return self._api_token
-        except Exception as e:
-            print(f"[SpotifyFetcher] API Token acquisition failed: {e}")
-            return None
-
-
 class SpotifyAuthHelper:
     """Handles 1-click Spotify OAuth authorization server to unlock unlimited playlist sizes."""
 
@@ -191,6 +124,73 @@ class SpotifyAuthHelper:
                 callback_fn(None, str(e))
 
         threading.Thread(target=run_server, daemon=True).start()
+
+
+class SpotifyFetcher:
+    """Fetches Spotify metadata via Embed scraping, User Auth, or Web API."""
+
+    def __init__(self, client_id: str = "", client_secret: str = "", refresh_token: str = ""):
+        self.client_id = client_id.strip()
+        self.client_secret = client_secret.strip()
+        self.refresh_token = refresh_token.strip()
+        self._api_token: Optional[str] = None
+        self._ssl_ctx = ssl.create_default_context()
+        self._ssl_ctx.check_hostname = False
+        self._ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    @staticmethod
+    def parse_spotify_url(url_or_uri: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parses Spotify URL or URI into (entity_type, entity_id).
+        Supports: playlist, album, track.
+        """
+        text = url_or_uri.strip()
+        # URI format: spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+        uri_match = re.match(r'spotify:(playlist|album|track):([a-zA-Z0-9]+)', text)
+        if uri_match:
+            return uri_match.group(1), uri_match.group(2)
+
+        # URL format: https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?...
+        url_match = re.search(r'open\.spotify\.com/(playlist|album|track)/([a-zA-Z0-9]+)', text)
+        if url_match:
+            return url_match.group(1), url_match.group(2)
+
+        return None, None
+
+    def _get_api_token(self) -> Optional[str]:
+        """Obtains an OAuth Bearer token using Refresh Token (preferred) or Client Credentials flow."""
+        if not self.client_id or not self.client_secret:
+            return None
+        if self._api_token:
+            return self._api_token
+
+        try:
+            auth_str = f"{self.client_id}:{self.client_secret}"
+            b64_auth = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
+            
+            if self.refresh_token:
+                payload = {
+                    "grant_type": "refresh_token",
+                    "refresh_token": self.refresh_token
+                }
+            else:
+                payload = {"grant_type": "client_credentials"}
+
+            req = urllib.request.Request(
+                "https://accounts.spotify.com/api/token",
+                data=urllib.parse.urlencode(payload).encode('utf-8'),
+                headers={
+                    "Authorization": f"Basic {b64_auth}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+            )
+            with urllib.request.urlopen(req, context=self._ssl_ctx, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                self._api_token = data.get("access_token")
+                return self._api_token
+        except Exception as e:
+            print(f"[SpotifyFetcher] API Token acquisition failed: {e}")
+            return None
 
     def fetch_entity(self, url_or_uri: str) -> Dict:
         """

@@ -13,11 +13,12 @@ import base64
 import urllib.request
 import urllib.parse
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Callable
 
 from mutagen.id3 import (
-    ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, APIC, TCMP, ID3NoHeaderError
+    ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, APIC, TCMP, USLT, TXXX, ID3NoHeaderError
 )
 from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
@@ -543,8 +544,109 @@ class SpotifyFetcher:
         raise ValueError(f"Unsupported entity type: {entity_type}")
 
 
+class LyricsFetcher:
+    """Fetches synchronized (.lrc) and plain text lyrics from LRCLIB."""
+
+    @staticmethod
+    def fetch_lyrics(artist: str, title: str, album: str = "", duration_s: int = 0) -> Dict[str, str]:
+        """
+        Returns dict with "plain_lyrics" (str) and "synced_lyrics" (str in LRC format).
+        """
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        clean_title = re.sub(r'\s*-\s*(Remastered|Remaster|Live|Single Version).*$', '', title, flags=re.IGNORECASE).strip()
+        params = {"artist_name": artist, "track_name": clean_title}
+        if album and album not in ["Spotify Playlist", "Spotify Collection", "Singles"]:
+            params["album_name"] = album
+        if duration_s > 0:
+            params["duration"] = int(duration_s)
+
+        headers = {"User-Agent": "ShallotMediaArchive/1.1 (https://github.com/strothman/util-SMArchive)"}
+
+        # 1. Direct fetch
+        try:
+            url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(params)}"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, context=ctx, timeout=4) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                plain = data.get("plainLyrics") or ""
+                synced = data.get("syncedLyrics") or ""
+                if plain or synced:
+                    return {"plain_lyrics": plain, "synced_lyrics": synced}
+        except Exception:
+            pass
+
+        # 2. Search fallback
+        try:
+            q = f"{artist} {clean_title}"
+            s_url = f"https://lrclib.net/api/search?q={urllib.parse.quote(q)}"
+            s_req = urllib.request.Request(s_url, headers=headers)
+            with urllib.request.urlopen(s_req, context=ctx, timeout=4) as resp:
+                results = json.loads(resp.read().decode('utf-8'))
+                if results and isinstance(results, list):
+                    item = results[0]
+                    return {
+                        "plain_lyrics": item.get("plainLyrics") or "",
+                        "synced_lyrics": item.get("syncedLyrics") or ""
+                    }
+        except Exception:
+            pass
+
+        return {"plain_lyrics": "", "synced_lyrics": ""}
+
+
+class ReplayGainCalculator:
+    """Calculates ReplayGain / EBU R128 loudness tags using bundled ffmpeg."""
+
+    @staticmethod
+    def calculate_replaygain(file_path: str, ffmpeg_path: str) -> Optional[Tuple[str, str]]:
+        """
+        Returns (gain_db_str, peak_str) e.g. ("-4.20 dB", "0.985412")
+        """
+        if not os.path.exists(file_path) or not os.path.exists(ffmpeg_path):
+            return None
+
+        try:
+            cmd = [
+                ffmpeg_path,
+                "-nostats",
+                "-i", file_path,
+                "-filter_complex", "ebur128=peak=true",
+                "-f", "null",
+                "-"
+            ]
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            out = res.stderr
+            i_match = re.search(r'I:\s+([-\d.]+)\s+LUFS', out)
+            peak_match = re.search(r'Peak:\s+([-\d.]+)\s+dBFS', out)
+
+            if i_match:
+                lufs = float(i_match.group(1))
+                gain = -18.0 - lufs
+                gain_str = f"{gain:+.2f} dB"
+                peak_str = "1.000000"
+                if peak_match:
+                    try:
+                        peak_db = float(peak_match.group(1))
+                        peak_val = 10.0 ** (peak_db / 20.0)
+                        peak_str = f"{peak_val:.6f}"
+                    except Exception:
+                        pass
+                return gain_str, peak_str
+        except Exception:
+            pass
+        return None
+
+
 class PlexampTagger:
-    """Tags audio files (MP3, FLAC, M4A) with complete Plexamp-compliant metadata & cover art."""
+    """Tags audio files (MP3, FLAC, M4A) with complete Plexamp-compliant metadata, lyrics & cover art."""
 
     @staticmethod
     def download_cover_art(url: str, output_path: str) -> bool:
@@ -572,11 +674,12 @@ class PlexampTagger:
         cls,
         file_path: str,
         track_info: Dict,
-        cover_image_path: Optional[str] = None
+        cover_image_path: Optional[str] = None,
+        plain_lyrics: str = "",
+        replaygain: Optional[Tuple[str, str]] = None
     ) -> bool:
         """
         Applies rich Plexamp ID3/FLAC/MP4 tags to the downloaded audio file.
-        track_info keys: title, artist, artists, album, album_artist, track_number, total_tracks, disc_number, year, release_date
         """
         if not os.path.exists(file_path):
             return False
@@ -602,19 +705,19 @@ class PlexampTagger:
                 cls._tag_mp3(
                     file_path, title, artist, artists, album, album_artist,
                     track_num, total_tracks, disc_num, year, rel_date,
-                    is_compilation, cover_image_path
+                    is_compilation, cover_image_path, plain_lyrics, replaygain
                 )
             elif ext == ".flac":
                 cls._tag_flac(
                     file_path, title, artist, artists, album, album_artist,
                     track_num, total_tracks, disc_num, year, rel_date,
-                    is_compilation, cover_image_path
+                    is_compilation, cover_image_path, plain_lyrics, replaygain
                 )
             elif ext in [".m4a", ".aac", ".mp4"]:
                 cls._tag_mp4(
                     file_path, title, artist, artists, album, album_artist,
                     track_num, total_tracks, disc_num, year, rel_date,
-                    is_compilation, cover_image_path
+                    is_compilation, cover_image_path, plain_lyrics, replaygain
                 )
             return True
         except Exception as e:
@@ -625,7 +728,8 @@ class PlexampTagger:
     def _tag_mp3(
         file_path: str, title: str, artist: str, artists: List[str], album: str,
         album_artist: str, track_num: int, total_tracks: int, disc_num: int,
-        year: str, rel_date: str, is_compilation: bool, cover_path: Optional[str]
+        year: str, rel_date: str, is_compilation: bool, cover_path: Optional[str],
+        plain_lyrics: str = "", replaygain: Optional[Tuple[str, str]] = None
     ):
         try:
             tags = ID3(file_path)
@@ -658,6 +762,15 @@ class PlexampTagger:
         if is_compilation:
             tags.add(TCMP(encoding=3, text="1"))
 
+        if plain_lyrics:
+            tags.delall("USLT")
+            tags.add(USLT(encoding=3, lang='eng', desc='', text=plain_lyrics))
+
+        if replaygain:
+            gain_str, peak_str = replaygain
+            tags.add(TXXX(encoding=3, desc='REPLAYGAIN_TRACK_GAIN', text=gain_str))
+            tags.add(TXXX(encoding=3, desc='REPLAYGAIN_TRACK_PEAK', text=peak_str))
+
         if cover_path and os.path.exists(cover_path):
             tags.delall("APIC")
             with open(cover_path, "rb") as img_f:
@@ -677,7 +790,8 @@ class PlexampTagger:
     def _tag_flac(
         file_path: str, title: str, artist: str, artists: List[str], album: str,
         album_artist: str, track_num: int, total_tracks: int, disc_num: int,
-        year: str, rel_date: str, is_compilation: bool, cover_path: Optional[str]
+        year: str, rel_date: str, is_compilation: bool, cover_path: Optional[str],
+        plain_lyrics: str = "", replaygain: Optional[Tuple[str, str]] = None
     ):
         audio = FLAC(file_path)
         audio["TITLE"] = title
@@ -694,6 +808,15 @@ class PlexampTagger:
         if is_compilation:
             audio["COMPILATION"] = "1"
 
+        if plain_lyrics:
+            audio["LYRICS"] = plain_lyrics
+            audio["UNSYNCEDLYRICS"] = plain_lyrics
+
+        if replaygain:
+            gain_str, peak_str = replaygain
+            audio["REPLAYGAIN_TRACK_GAIN"] = gain_str
+            audio["REPLAYGAIN_TRACK_PEAK"] = peak_str
+
         if cover_path and os.path.exists(cover_path):
             audio.clear_pictures()
             pic = Picture()
@@ -709,7 +832,8 @@ class PlexampTagger:
     def _tag_mp4(
         file_path: str, title: str, artist: str, artists: List[str], album: str,
         album_artist: str, track_num: int, total_tracks: int, disc_num: int,
-        year: str, rel_date: str, is_compilation: bool, cover_path: Optional[str]
+        year: str, rel_date: str, is_compilation: bool, cover_path: Optional[str],
+        plain_lyrics: str = "", replaygain: Optional[Tuple[str, str]] = None
     ):
         audio = MP4(file_path)
         audio["\xa9nam"] = title
@@ -725,6 +849,14 @@ class PlexampTagger:
         if is_compilation:
             audio["cpil"] = True
 
+        if plain_lyrics:
+            audio["\xa9lyr"] = plain_lyrics
+
+        if replaygain:
+            gain_str, peak_str = replaygain
+            audio["----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN"] = gain_str.encode('utf-8')
+            audio["----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK"] = peak_str.encode('utf-8')
+
         if cover_path and os.path.exists(cover_path):
             with open(cover_path, "rb") as f:
                 cov_data = f.read()
@@ -735,7 +867,7 @@ class PlexampTagger:
 
 
 class SpotifyPlexampPipeline:
-    """Coordinates search on YouTube, download via yt-dlp, tagging, and Plex file structure."""
+    """Coordinates search on YouTube, download via yt-dlp, tagging, lyrics, ReplayGain, and Plex file structure."""
 
     def __init__(
         self,
@@ -751,22 +883,70 @@ class SpotifyPlexampPipeline:
         self.progress_cb = progress_callback
         self.track_status_cb = track_status_callback
         self.is_cancelled = False
-        self.active_proc: Optional[subprocess.Popen] = None
+        self.active_procs: List[subprocess.Popen] = []
+        self._lock = threading.Lock()
 
     def cancel(self):
         self.is_cancelled = True
-        if self.active_proc:
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(self.active_proc.pid)],
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-            except Exception:
+        with self._lock:
+            for proc in self.active_procs:
                 try:
-                    self.active_proc.kill()
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
                 except Exception:
-                    pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            self.active_procs.clear()
+
+    @staticmethod
+    def get_destination_path(
+        base_music_dir: str,
+        track: Dict,
+        collection: Dict,
+        audio_format: str = "mp3",
+        folder_structure: str = "plex_standard"
+    ) -> Tuple[str, str, str]:
+        """
+        Returns (dest_dir, dest_filename, final_file_path).
+        """
+        t_artist = track.get("album_artist") or track.get("artist", "Unknown Artist")
+        t_album = track.get("album", "Singles")
+        t_title = track.get("title", "Unknown Track")
+        t_num = int(track.get("track_number", 1))
+
+        clean_artist = sanitize_filename(t_artist)
+        clean_album = sanitize_filename(t_album)
+        clean_title = sanitize_filename(t_title)
+        ext = "flac" if "flac" in audio_format.lower() else ("m4a" if "m4a" in audio_format.lower() else "mp3")
+
+        if folder_structure == "plex_standard":
+            dest_dir = os.path.join(base_music_dir, clean_artist, clean_album)
+            dest_filename = f"{t_num:02d} - {clean_title}.{ext}"
+        else:
+            plist_name = sanitize_filename(collection.get("title", "Spotify Playlist"))
+            dest_dir = os.path.join(base_music_dir, "Playlists", plist_name)
+            dest_filename = f"{t_num:02d} - {clean_artist} - {clean_title}.{ext}"
+
+        final_file_path = os.path.join(dest_dir, dest_filename)
+        return dest_dir, dest_filename, final_file_path
+
+    @classmethod
+    def check_existing_track(
+        cls,
+        base_music_dir: str,
+        track: Dict,
+        collection: Dict,
+        audio_format: str = "mp3",
+        folder_structure: str = "plex_standard"
+    ) -> bool:
+        """Checks if a track already exists in the destination library."""
+        _, _, final_path = cls.get_destination_path(base_music_dir, track, collection, audio_format, folder_structure)
+        return os.path.exists(final_path) and os.path.getsize(final_path) > 100000
 
     def process_playlist(
         self,
@@ -774,12 +954,15 @@ class SpotifyPlexampPipeline:
         selected_tracks: List[Dict],
         base_music_dir: str,
         audio_format: str = "mp3",
-        folder_structure: str = "plex_standard",  # "plex_standard" or "playlist_folder"
+        folder_structure: str = "plex_standard",
         embed_art: bool = True,
-        save_cover_file: bool = True
+        save_cover_file: bool = True,
+        fetch_lyrics: bool = True,
+        calculate_replaygain: bool = True,
+        concurrency: int = 2
     ) -> Dict[str, int]:
         """
-        Downloads each track, tags with Plexamp metadata, and organizes in destination.
+        Downloads tracks with concurrency, tags with Plexamp metadata, lyrics, ReplayGain, and organizes in destination.
         Returns {"completed": int, "skipped": int, "failed": int}
         """
         self.is_cancelled = False
@@ -800,19 +983,22 @@ class SpotifyPlexampPipeline:
             PlexampTagger.download_cover_art(collection.get("cover_url", ""), collection_cover_path)
 
         app_dir = os.path.dirname(self.yt_dlp_path)
+        ffmpeg_exe = os.path.join(app_dir, "ffmpeg.exe")
 
-        for idx, track in enumerate(selected_tracks, start=1):
+        completed_count = [0]
+
+        def process_single_track(item_tuple):
             if self.is_cancelled:
-                self.log("🛑 Download pipeline cancelled by user.")
-                break
+                return
 
+            seq_idx, track = item_tuple
             t_title = track.get("title", "Unknown Track")
             t_artist = track.get("artist", "Unknown Artist")
             t_album = track.get("album", "")
-            t_num = track.get("track_number", idx)
-            track_index = track.get("_track_index", idx)
+            t_num = track.get("track_number", seq_idx)
+            track_index = track.get("_track_index", seq_idx)
 
-            # Ensure track has its true original album metadata
+            # Ensure track has true album metadata
             if not t_album or t_album in ["Spotify Playlist", "Spotify Collection", "Singles"]:
                 resolved = SpotifyFetcher.resolve_track_album(
                     artist=t_artist,
@@ -832,48 +1018,38 @@ class SpotifyPlexampPipeline:
                     track["cover_url"] = resolved.get("cover_url")
                 t_num = track["track_number"]
 
-            self.log(f"[{idx}/{total_selected}] Searching & downloading: {t_artist} - {t_title} (Album: {t_album})")
-            self.progress_cb(float(idx - 1) / total_selected, f"[{idx}/{total_selected}] {t_artist} - {t_title}")
-            if self.track_status_cb:
-                self.track_status_cb(track_index, "Downloading...", "#38BDF8")
-
-            # 1. Determine destination paths
-            clean_artist = sanitize_filename(track.get("album_artist") or t_artist)
-            clean_album = sanitize_filename(t_album)
-            clean_title = sanitize_filename(t_title)
-            ext = "flac" if "flac" in audio_format.lower() else ("m4a" if "m4a" in audio_format.lower() else "mp3")
-
-            if folder_structure == "plex_standard":
-                # Music / Artist / Album / 01 - Title.ext
-                dest_dir = os.path.join(base_music_dir, clean_artist, clean_album)
-                dest_filename = f"{t_num:02d} - {clean_title}.{ext}"
-            else:
-                # Music / Playlists / Playlist Name / 01 - Artist - Title.ext
-                plist_name = sanitize_filename(collection.get("title", "Spotify Playlist"))
-                dest_dir = os.path.join(base_music_dir, "Playlists", plist_name)
-                dest_filename = f"{t_num:02d} - {clean_artist} - {clean_title}.{ext}"
-
+            dest_dir, dest_filename, final_file_path = self.get_destination_path(
+                base_music_dir, track, collection, audio_format, folder_structure
+            )
             os.makedirs(dest_dir, exist_ok=True)
-            final_file_path = os.path.join(dest_dir, dest_filename)
 
-            # Check if file already exists
+            # Check if file already exists in library
             if os.path.exists(final_file_path) and os.path.getsize(final_file_path) > 100000:
-                self.log(f"✓ Already exists in Plex library: {dest_filename}")
-                if self.track_status_cb:
-                    self.track_status_cb(track_index, "✓ Exists", "#4ADE80")
-                stats["completed"] += 1
-                continue
+                with self._lock:
+                    self.log(f"✓ Already in library: {dest_filename}")
+                    stats["completed"] += 1
+                    completed_count[0] += 1
+                    pct = completed_count[0] / total_selected
+                    self.progress_cb(pct, f"[{completed_count[0]}/{total_selected}] In library: {t_title}")
+                    if self.track_status_cb:
+                        self.track_status_cb(track_index, "✓ In Library", "#4ADE80")
+                return
 
-            # 2. Download Cover Art for Track (if track has unique cover or use collection cover)
+            with self._lock:
+                self.log(f"[{seq_idx}/{total_selected}] Downloading: {t_artist} - {t_title}")
+                if self.track_status_cb:
+                    self.track_status_cb(track_index, "Downloading...", "#38BDF8")
+
+            # 1. Download Cover Art
             track_cover_path = None
             t_cover_url = track.get("cover_url") or collection.get("cover_url")
             if embed_art and t_cover_url:
-                track_cover_path = os.path.join(temp_dir, f"track_cover_{track.get('spotify_id', idx)}.jpg")
+                track_cover_path = os.path.join(temp_dir, f"track_cover_{track.get('spotify_id', seq_idx)}.jpg")
                 if not os.path.exists(track_cover_path):
                     if not PlexampTagger.download_cover_art(t_cover_url, track_cover_path):
                         track_cover_path = collection_cover_path
 
-            # Save cover.jpg in album directory for Plex library scanner
+            # Save cover.jpg in album directory for Plex scanner
             if save_cover_file and (track_cover_path or collection_cover_path):
                 art_source = track_cover_path if track_cover_path and os.path.exists(track_cover_path) else collection_cover_path
                 if art_source and os.path.exists(art_source):
@@ -884,11 +1060,12 @@ class SpotifyPlexampPipeline:
                         except Exception:
                             pass
 
-            # 3. Search and Download from YouTube
+            # 2. Search and Download from YouTube
             search_query = f"{t_artist} - {t_title} audio"
-            temp_output_template = os.path.join(temp_dir, f"dl_{idx}_%(id)s.%(ext)s")
-
+            ext = "flac" if "flac" in audio_format.lower() else ("m4a" if "m4a" in audio_format.lower() else "mp3")
+            temp_output_template = os.path.join(temp_dir, f"dl_{seq_idx}_%(id)s.%(ext)s")
             aq = "0" if "flac" in audio_format.lower() or "320" in audio_format.lower() else "5"
+
             cmd = [
                 self.yt_dlp_path,
                 "--newline",
@@ -904,73 +1081,112 @@ class SpotifyPlexampPipeline:
             ] + self.cookie_args
 
             try:
-                self.active_proc = subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
+                with self._lock:
+                    self.active_procs.append(proc)
 
-                for line in self.active_proc.stdout:
+                for line in proc.stdout:
                     line_clean = line.strip()
-                    if "[download]" in line_clean and "%" in line_clean:
-                        # Extract percentage e.g. 45.2%
-                        p_match = re.search(r'([0-9.]+)%', line_clean)
-                        if p_match:
-                            try:
-                                pct = float(p_match.group(1))
-                                overall_pct = ((idx - 1) + (pct / 100.0)) / total_selected
-                                self.progress_cb(overall_pct, f"[{idx}/{total_selected}] Downloading {pct:.0f}%: {t_title}")
-                            except Exception:
-                                pass
-                    elif "ERROR:" in line_clean and "HTTP Error 403" not in line_clean:
-                        self.log(f"⚠️ {line_clean}", is_error=True)
+                    if "ERROR:" in line_clean and "HTTP Error 403" not in line_clean:
+                        with self._lock:
+                            self.log(f"⚠️ {line_clean}", is_error=True)
 
-                self.active_proc.wait()
+                proc.wait()
+                with self._lock:
+                    if proc in self.active_procs:
+                        self.active_procs.remove(proc)
+
                 if self.is_cancelled:
-                    break
+                    return
 
-                if self.active_proc.returncode != 0:
-                    self.log(f"❌ Failed to download '{t_title}' from YouTube.", is_error=True)
-                    if self.track_status_cb:
-                        self.track_status_cb(track_index, "❌ Failed", "#FB7185")
-                    stats["failed"] += 1
-                    continue
+                if proc.returncode != 0:
+                    with self._lock:
+                        self.log(f"❌ Failed to download '{t_title}' from YouTube.", is_error=True)
+                        stats["failed"] += 1
+                        completed_count[0] += 1
+                        if self.track_status_cb:
+                            self.track_status_cb(track_index, "❌ Failed", "#FB7185")
+                    return
 
                 # Locate downloaded file in temp_dir
                 downloaded_file = None
                 for fname in os.listdir(temp_dir):
-                    if fname.startswith(f"dl_{idx}_") and fname.lower().endswith(f".{ext}"):
+                    if fname.startswith(f"dl_{seq_idx}_") and fname.lower().endswith(f".{ext}"):
                         downloaded_file = os.path.join(temp_dir, fname)
                         break
 
                 if not downloaded_file or not os.path.exists(downloaded_file):
-                    self.log(f"❌ Downloaded audio file not found for '{t_title}'.", is_error=True)
-                    if self.track_status_cb:
-                        self.track_status_cb(track_index, "❌ Missing", "#FB7185")
-                    stats["failed"] += 1
-                    continue
+                    with self._lock:
+                        self.log(f"❌ Downloaded audio file not found for '{t_title}'.", is_error=True)
+                        stats["failed"] += 1
+                        completed_count[0] += 1
+                        if self.track_status_cb:
+                            self.track_status_cb(track_index, "❌ Missing", "#FB7185")
+                    return
 
-                # 4. Move to final destination
+                # Move to destination
                 shutil.move(downloaded_file, final_file_path)
 
-                # 5. Tag with Plexamp Metadata & Cover Art
-                if embed_art:
-                    PlexampTagger.apply_metadata(final_file_path, track, track_cover_path)
-                else:
-                    PlexampTagger.apply_metadata(final_file_path, track, None)
-
-                self.log(f"✓ Successfully tagged for Plexamp: {dest_filename}")
                 if self.track_status_cb:
-                    self.track_status_cb(track_index, "✓ Done", "#4ADE80")
-                stats["completed"] += 1
+                    self.track_status_cb(track_index, "Tagging...", "#C084FC")
+
+                # 3. Lyrics Fetching (.lrc & embedded)
+                plain_lyrics = ""
+                if fetch_lyrics:
+                    dur_s = int(track.get("duration_ms", 0) / 1000)
+                    lyric_data = LyricsFetcher.fetch_lyrics(t_artist, t_title, t_album, dur_s)
+                    plain_lyrics = lyric_data.get("plain_lyrics", "")
+                    synced_lyrics = lyric_data.get("synced_lyrics", "")
+
+                    if synced_lyrics:
+                        lrc_path = os.path.splitext(final_file_path)[0] + ".lrc"
+                        try:
+                            with open(lrc_path, "w", encoding="utf-8") as lrc_f:
+                                lrc_f.write(synced_lyrics)
+                        except Exception:
+                            pass
+
+                # 4. Volume Normalization (ReplayGain)
+                replaygain = None
+                if calculate_replaygain and os.path.exists(ffmpeg_exe):
+                    replaygain = ReplayGainCalculator.calculate_replaygain(final_file_path, ffmpeg_exe)
+
+                # 5. Apply Metadata & Cover Art
+                PlexampTagger.apply_metadata(
+                    final_file_path,
+                    track,
+                    track_cover_path if embed_art else None,
+                    plain_lyrics=plain_lyrics,
+                    replaygain=replaygain
+                )
+
+                with self._lock:
+                    stats["completed"] += 1
+                    completed_count[0] += 1
+                    pct = completed_count[0] / total_selected
+                    self.log(f"✓ Tagged for Plexamp: {dest_filename}")
+                    self.progress_cb(pct, f"[{completed_count[0]}/{total_selected}] ✓ {t_title}")
+                    if self.track_status_cb:
+                        self.track_status_cb(track_index, "✓ Done", "#4ADE80")
 
             except Exception as e:
-                self.log(f"❌ Error processing '{t_title}': {e}", is_error=True)
-                if self.track_status_cb:
-                    self.track_status_cb(track_index, "❌ Error", "#FB7185")
-                stats["failed"] += 1
+                with self._lock:
+                    self.log(f"❌ Error processing '{t_title}': {e}", is_error=True)
+                    stats["failed"] += 1
+                    completed_count[0] += 1
+                    if self.track_status_cb:
+                        self.track_status_cb(track_index, "❌ Error", "#FB7185")
+
+        # Concurrently execute track downloads
+        workers = max(1, min(concurrency, 4))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(process_single_track, enumerate(selected_tracks, start=1)))
 
         # Clean up temp folder
         try:
@@ -978,5 +1194,5 @@ class SpotifyPlexampPipeline:
         except Exception:
             pass
 
-        self.progress_cb(1.0, f"Sync complete! {stats['completed']} downloaded, {stats['failed']} failed.")
+        self.progress_cb(1.0, f"Sync complete! {stats['completed']} ready in Plex library, {stats['failed']} failed.")
         return stats

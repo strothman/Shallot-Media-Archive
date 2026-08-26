@@ -13,8 +13,12 @@
 
 ### 🎵 Spotify to Plexamp Sync
 - **Zero-Config Extraction**: Paste any public Spotify playlist, album, or track URL and fetch complete metadata without requiring API credentials.
-- **YouTube Matching Engine**: Searches and matches each song against YouTube audio streams with automated anti-bot bypass.
-- **Plexamp Metadata Tagger (`mutagen`)**: Automatically embeds Track Title, Artist, Album Artist, Album, Track Numbers, Release Year, and 640×640 front cover art.
+- **True Original Studio Albums**: Automatically resolves original release dates, studio album titles, and original album track numbers for every song in a playlist.
+- **Synced Karaoke Lyrics (`.lrc`) & Embedded Tags**: Automatically fetches synchronized `.lrc` sidecars (for Plexamp's animated lyrics view) and embeds `USLT`/`LYRICS` ID3 tags.
+- **ReplayGain & Volume Normalization**: Analyzes audio loudness via `ffmpeg ebur128` and embeds track gain tags to prevent volume jumps across songs.
+- **Concurrent Multi-Track Sync**: Downloads 2–3 songs simultaneously for 3× faster playlist synchronization.
+- **Smart Duplicate Detection**: Pre-scans your music directory and badges existing songs with `✓ In Library`.
+- **Plexamp Metadata Tagger (`mutagen`)**: Embeds Track Title, Artist, Album Artist, Album, Track Numbers, Release Year, and 640×640 front cover art.
 - **Plex Standard Folder Structure**: Organizes files into `Music / Artist / Album / 01 - Track Title.ext` and writes `cover.jpg` for instant Plex scanner recognition.
 - **Multiple Audio Formats**: Supports MP3 (320 kbps), FLAC (Lossless), and M4A (AAC 256 kbps).
 

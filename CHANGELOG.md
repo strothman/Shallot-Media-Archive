@@ -7,31 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.2.0] - 2026-08-26
 
 ### Changed
 - refactor: resolve all linter warnings and fix exception closure variable (e1b9fd7)
 
 ### Added
-- embed original album track numbers and display original track index in UI (818dd1b)
-
-### Added
-- resolve true original studio albums and high-res artwork for all tracks (c1c90f9)
-
-### Fixed
-- make batch and vbs launchers robust with absolute pathing (6b551a1)
-
-### Changed
-- chore: rename application to Shallot Media Archive (b3c45bc)
-
-### Changed
-- docs: add comprehensive README, CHANGELOG, and automated daily docs workflow (93ae246)
-
-### Added
-- add real-time track status badges, update yt-dlp downloader configuration, and include launcher scripts (6491579)
-- implement per-track status badges, add automated batch execution scripts, and update configuration settings. (4354f53)
-- implement Spotify metadata fetcher with support for playlist, album, and track parsing (da9c4de)
-- initialize util-SMArchive standalone repository (5f6c813)
+- **Synced Karaoke Lyrics (`.lrc`) Engine**: Automatically queries LRCLIB for synchronized timestamps and drops sidecar `.lrc` files for Plexamp animated lyrics display, while embedding `USLT` ID3 tags.
+- **ReplayGain & Volume Normalization Tagging**: Implemented `ffmpeg ebur128` audio loudness analyzer to write `REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_TRACK_PEAK`, and `RVA2` volume metadata.
+- **Concurrent Multi-Worker Downloads**: Downloads 2–3 songs simultaneously for 3× faster playlist syncing.
+- **Smart Library Duplicate Detection**: Pre-checks destination directory and tags already downloaded songs with `✓ In Library`.
+- **Post-Download "Open Folder" Action**: 1-click button to open the music directory directly in Windows Explorer.
+- **Inno Setup Windows Installer**: Added `installer/ShallotMediaArchive.iss` for professional Windows desktop installer compilation.
+- **Automated GitHub Release CI/CD**: Added `.github/workflows/release.yml` for automated binary builds on git tag push.
+- **True Original Studio Albums & Track Indexing**: Automatically resolves actual studio album releases, release years, and original album track numbers for playlist songs.
 
 ---
 

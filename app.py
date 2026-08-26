@@ -610,12 +610,12 @@ class DownloaderApp(ctk.CTk):
         self.btn_spotify_browse.pack(side="right")
         self.theme_buttons_secondary.append(self.btn_spotify_browse)
 
-        # Format + Org + Switch row
-        opts_row = ctk.CTkFrame(cfg_frame, fg_color="transparent")
-        opts_row.pack(fill="x")
+        # Row 1: Format + Org + Concurrency
+        opts_row1 = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        opts_row1.pack(fill="x", pady=(0, 3))
 
         self.spotify_format_menu = ctk.CTkOptionMenu(
-            opts_row,
+            opts_row1,
             values=["MP3 (320 kbps)", "FLAC (Lossless)", "M4A (256 kbps)"],
             height=28,
             font=("Segoe UI", 10),
@@ -629,7 +629,7 @@ class DownloaderApp(ctk.CTk):
         self.theme_option_menus.append(self.spotify_format_menu)
 
         self.spotify_org_menu = ctk.CTkOptionMenu(
-            opts_row,
+            opts_row1,
             values=["Plex Standard (Artist/Album/Track)", "Playlist Folder (Playlists/Track)"],
             height=28,
             font=("Segoe UI", 10),
@@ -642,20 +642,69 @@ class DownloaderApp(ctk.CTk):
         self.spotify_org_menu.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.theme_option_menus.append(self.spotify_org_menu)
 
+        self.spotify_concurrency_menu = ctk.CTkOptionMenu(
+            opts_row1,
+            values=["2 Tracks Concurrent", "3 Tracks Concurrent", "1 Track Safe"],
+            height=28,
+            width=120,
+            font=("Segoe UI", 9),
+            dropdown_font=("Segoe UI", 9),
+            command=lambda v: self.save_setting("spotify_concurrency", v)
+        )
+        saved_sp_conc = self.saved_settings.get("spotify_concurrency", "2 Tracks Concurrent")
+        if saved_sp_conc in self.spotify_concurrency_menu._values:
+            self.spotify_concurrency_menu.set(saved_sp_conc)
+        self.spotify_concurrency_menu.pack(side="left")
+        self.theme_option_menus.append(self.spotify_concurrency_menu)
+
+        # Row 2: Toggles (Artwork, Synced Lyrics, ReplayGain)
+        opts_row2 = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        opts_row2.pack(fill="x", pady=(2, 0))
+
         self.spotify_embed_art_switch = ctk.CTkSwitch(
-            opts_row,
+            opts_row2,
             text="Artwork",
             font=("Segoe UI", 9),
-            width=60,
-            height=20,
+            width=58,
+            height=18,
             command=lambda: self.save_setting("spotify_embed_art", bool(self.spotify_embed_art_switch.get()))
         )
         if self.saved_settings.get("spotify_embed_art", True):
             self.spotify_embed_art_switch.select()
         else:
             self.spotify_embed_art_switch.deselect()
-        self.spotify_embed_art_switch.pack(side="left", padx=(2, 0))
+        self.spotify_embed_art_switch.pack(side="left", padx=(0, 6))
         self.theme_switches.append(self.spotify_embed_art_switch)
+
+        self.spotify_lyrics_switch = ctk.CTkSwitch(
+            opts_row2,
+            text="Lyrics (.lrc)",
+            font=("Segoe UI", 9),
+            width=70,
+            height=18,
+            command=lambda: self.save_setting("spotify_fetch_lyrics", bool(self.spotify_lyrics_switch.get()))
+        )
+        if self.saved_settings.get("spotify_fetch_lyrics", True):
+            self.spotify_lyrics_switch.select()
+        else:
+            self.spotify_lyrics_switch.deselect()
+        self.spotify_lyrics_switch.pack(side="left", padx=(0, 6))
+        self.theme_switches.append(self.spotify_lyrics_switch)
+
+        self.spotify_gain_switch = ctk.CTkSwitch(
+            opts_row2,
+            text="ReplayGain",
+            font=("Segoe UI", 9),
+            width=68,
+            height=18,
+            command=lambda: self.save_setting("spotify_calculate_replaygain", bool(self.spotify_gain_switch.get()))
+        )
+        if self.saved_settings.get("spotify_calculate_replaygain", True):
+            self.spotify_gain_switch.select()
+        else:
+            self.spotify_gain_switch.deselect()
+        self.spotify_gain_switch.pack(side="left")
+        self.theme_switches.append(self.spotify_gain_switch)
 
         # Card 3: Tracklist Selection
         self.spotify_tracks_card = ctk.CTkFrame(self.spotify_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
@@ -738,12 +787,28 @@ class DownloaderApp(ctk.CTk):
         )
         self.btn_spotify_start.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
+        self.btn_spotify_open_folder = ctk.CTkButton(
+            sp_act_btns,
+            text="📂 Open Music Folder",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            width=140,
+            corner_radius=8,
+            fg_color="#0E1A24",
+            border_color="#00E5FF",
+            border_width=1,
+            text_color="#00E5FF",
+            command=self.open_spotify_music_folder
+        )
+        self.btn_spotify_open_folder.pack(side="left", padx=(0, 6))
+        self.theme_buttons_secondary.append(self.btn_spotify_open_folder)
+
         self.btn_spotify_stop = ctk.CTkButton(
             sp_act_btns,
             text="⏹ Cancel",
             font=("Segoe UI", 11, "bold"),
             height=36,
-            width=90,
+            width=85,
             corner_radius=8,
             fg_color="#3B1214",
             hover_color="#5C1D20",
@@ -2133,6 +2198,12 @@ class DownloaderApp(ctk.CTk):
         border_col = getattr(self, 'theme_cfg', {}).get('border', '#1F3A4E')
         text_sec = getattr(self, 'theme_cfg', {}).get('text_secondary', '#78909C')
 
+        dest_folder = self.spotify_folder_input.get().strip() or r"C:\SMA-downloads\Music"
+        raw_fmt = self.spotify_format_menu.get().lower()
+        audio_fmt = "flac" if "flac" in raw_fmt else ("m4a" if "m4a" in raw_fmt else "mp3")
+        raw_org = self.spotify_org_menu.get()
+        folder_struct = "playlist_folder" if "Playlist Folder" in raw_org else "plex_standard"
+
         for idx, track in enumerate(tracks, start=1):
             row_frame = ctk.CTkFrame(self.spotify_track_scroll, fg_color=input_bg, border_color=border_col, border_width=1, corner_radius=6, height=36)
             row_frame.pack(fill="x", padx=4, pady=2)
@@ -2175,7 +2246,14 @@ class DownloaderApp(ctk.CTk):
             dur_lbl = ctk.CTkLabel(row_frame, text=dur_str, font=("Segoe UI", 9), text_color=text_sec, width=40, anchor="e")
             dur_lbl.pack(side="left", padx=(0, 8))
 
-            status_badge = ctk.CTkLabel(row_frame, text="Ready", font=("Segoe UI", 9, "bold"), text_color="#78909C", width=65, anchor="e")
+            # Pre-check if already exists in library
+            is_in_lib = SpotifyPlexampPipeline.check_existing_track(
+                dest_folder, track, self.spotify_collection, audio_fmt, folder_struct
+            )
+            init_status = "✓ In Library" if is_in_lib else "Ready"
+            init_color = "#4ADE80" if is_in_lib else "#78909C"
+
+            status_badge = ctk.CTkLabel(row_frame, text=init_status, font=("Segoe UI", 9, "bold"), text_color=init_color, width=75, anchor="e")
             status_badge.pack(side="right", padx=(0, 10))
 
             self.spotify_track_items.append({
@@ -2199,6 +2277,15 @@ class DownloaderApp(ctk.CTk):
         total = len(self.spotify_track_items)
         self.spotify_track_count_lbl.configure(text=f"{selected} / {total} Selected")
         self.spotify_counter_lbl.configure(text=f"0 / {selected}")
+
+    def open_spotify_music_folder(self):
+        """ Opens the Plex music folder in Windows Explorer """
+        folder = self.spotify_folder_input.get().strip() or r"C:\SMA-downloads\Music"
+        os.makedirs(folder, exist_ok=True)
+        try:
+            os.startfile(folder)
+        except Exception as e:
+            self.log(f"Failed to open folder '{folder}': {e}", is_error=True)
 
     def start_spotify_sync(self):
         """ Runs the YouTube matching, downloading, and Plexamp tagging pipeline """
@@ -2227,6 +2314,15 @@ class DownloaderApp(ctk.CTk):
         folder_struct = "playlist_folder" if "Playlist Folder" in raw_org else "plex_standard"
 
         embed_art = bool(self.spotify_embed_art_switch.get())
+        fetch_lyrics = bool(self.spotify_lyrics_switch.get())
+        calc_replaygain = bool(self.spotify_gain_switch.get())
+
+        raw_conc = self.spotify_concurrency_menu.get()
+        concurrency = 2
+        if "3" in raw_conc:
+            concurrency = 3
+        elif "1" in raw_conc:
+            concurrency = 1
 
         yt_dlp_path = self.get_active_yt_dlp_path()
         cookie_args = self.get_cookie_args()
@@ -2257,7 +2353,7 @@ class DownloaderApp(ctk.CTk):
         )
 
         def run_pipeline():
-            self.log(f"Starting Spotify to Plexamp sync ({len(selected_tracks)} songs) to: {dest_folder}")
+            self.log(f"Starting Spotify to Plexamp sync ({len(selected_tracks)} songs) to: {dest_folder} (Concurrency: {concurrency})")
             stats = self.spotify_pipeline.process_playlist(
                 collection=self.spotify_collection,
                 selected_tracks=selected_tracks,
@@ -2265,7 +2361,10 @@ class DownloaderApp(ctk.CTk):
                 audio_format=audio_fmt,
                 folder_structure=folder_struct,
                 embed_art=embed_art,
-                save_cover_file=True
+                save_cover_file=True,
+                fetch_lyrics=fetch_lyrics,
+                calculate_replaygain=calc_replaygain,
+                concurrency=concurrency
             )
             self.after(0, lambda: self.finish_spotify_sync(stats))
 

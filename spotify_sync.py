@@ -14,6 +14,7 @@ import base64
 import urllib.request
 import urllib.parse
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Callable
 
 import mutagen
@@ -141,6 +142,87 @@ class SpotifyFetcher:
         # 2. Embed Scraper (0-config fallback)
         return self._fetch_via_embed(entity_type, entity_id)
 
+    @classmethod
+    def resolve_track_album(
+        cls,
+        artist: str,
+        title: str,
+        spotify_id: Optional[str] = None,
+        fallback_cover: str = "",
+        fallback_date: str = ""
+    ) -> Dict:
+        """
+        Resolves the true original studio album, album artist, release year,
+        track number, and high-res album cover for a track.
+        """
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # Clean search query (strip remaster / live noise)
+        clean_title = re.sub(r'\s*-\s*(Remastered|Remaster|Live|Single Version).*$', '', title, flags=re.IGNORECASE).strip()
+        query = f"{artist} {clean_title}"
+
+        # 1. Query iTunes Music Catalog API (Super-fast, accurate for real album titles)
+        try:
+            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&entity=song&limit=3"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, context=ctx, timeout=4) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                results = data.get("results", [])
+                if results:
+                    it = results[0]
+                    alb_name = it.get("collectionName")
+                    if alb_name:
+                        cover = it.get("artworkUrl100", "").replace("100x100bb", "640x640bb") or fallback_cover
+                        rel_date = it.get("releaseDate", "")[:10] or fallback_date
+                        return {
+                            "album": alb_name,
+                            "album_artist": it.get("artistName") or artist,
+                            "track_number": it.get("trackNumber", 1),
+                            "total_tracks": it.get("trackCount", 1),
+                            "release_date": rel_date,
+                            "year": rel_date[:4] if len(rel_date) >= 4 else "",
+                            "cover_url": cover
+                        }
+        except Exception:
+            pass
+
+        # 2. Spotify track embed fallback for original 640x640 artwork and date
+        if spotify_id and not str(spotify_id).startswith("track_"):
+            try:
+                emb_url = f"https://open.spotify.com/embed/track/{spotify_id}"
+                req = urllib.request.Request(emb_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, context=ctx, timeout=4) as resp:
+                    html = resp.read().decode('utf-8')
+                m = re.search(r'<script\s+id="__NEXT_DATA__"\s+type="application/json">(.*?)</script>', html, re.DOTALL)
+                if m:
+                    t_data = json.loads(m.group(1)).get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+                    vis = t_data.get("visualIdentity", {}).get("image", [])
+                    cov = vis[-1].get("url") if vis else fallback_cover
+                    rd = t_data.get("releaseDate", {}).get("isoString", "")[:10] or fallback_date
+                    return {
+                        "album": f"{clean_title} - Single",
+                        "album_artist": artist,
+                        "track_number": 1,
+                        "total_tracks": 1,
+                        "release_date": rd,
+                        "year": rd[:4] if len(rd) >= 4 else "",
+                        "cover_url": cov or fallback_cover
+                    }
+            except Exception:
+                pass
+
+        return {
+            "album": f"{clean_title} - Single",
+            "album_artist": artist,
+            "track_number": 1,
+            "total_tracks": 1,
+            "release_date": fallback_date,
+            "year": fallback_date[:4] if len(fallback_date) >= 4 else "",
+            "cover_url": fallback_cover
+        }
+
     def _fetch_via_embed(self, entity_type: str, entity_id: str) -> Dict:
         """Extracts metadata by scraping Spotify's public embed page."""
         embed_url = f"https://open.spotify.com/embed/{entity_type}/{entity_id}"
@@ -200,35 +282,36 @@ class SpotifyFetcher:
             # Single track entity
             track_artists = [a.get("name") for a in entity.get("artists", []) if a.get("name")]
             primary_artist = track_artists[0] if track_artists else (entity.get("subtitle") or "Unknown Artist")
-            track_cover = cover_url
+            t_title = entity.get("title") or entity.get("name") or "Unknown Track"
+            
+            # Resolve actual album
+            alb_meta = self.resolve_track_album(primary_artist, t_title, entity_id, cover_url, default_release_date)
+            
             t_data = {
-                "title": entity.get("title") or entity.get("name") or "Unknown Track",
+                "title": t_title,
                 "artist": primary_artist,
                 "artists": track_artists or [primary_artist],
-                "album": title if entity_type == "album" else "Singles",
-                "album_artist": primary_artist,
-                "track_number": 1,
-                "total_tracks": 1,
+                "album": alb_meta.get("album", f"{t_title} - Single"),
+                "album_artist": alb_meta.get("album_artist", primary_artist),
+                "track_number": alb_meta.get("track_number", 1),
+                "total_tracks": alb_meta.get("total_tracks", 1),
                 "disc_number": 1,
-                "release_date": default_release_date,
-                "year": default_year,
+                "release_date": alb_meta.get("release_date") or default_release_date,
+                "year": alb_meta.get("year") or default_year,
                 "duration_ms": entity.get("duration", 0),
-                "cover_url": track_cover,
+                "cover_url": alb_meta.get("cover_url") or cover_url,
                 "spotify_id": entity_id,
                 "spotify_url": f"https://open.spotify.com/track/{entity_id}"
             }
             tracks.append(t_data)
-        else:
-            # Playlist or Album
+        elif entity_type == "album":
+            # Album entity - all tracks belong to this album
             total = len(raw_tracks)
             for idx, item in enumerate(raw_tracks, start=1):
                 t_title = item.get("title") or "Unknown Track"
                 t_artist_raw = item.get("subtitle") or author_name or "Unknown Artist"
-                # Split multiple artist names if comma separated
                 artists = [a.strip() for a in t_artist_raw.split(",") if a.strip()]
                 primary_artist = artists[0] if artists else t_artist_raw
-                album_name = title if entity_type == "album" else "Spotify Playlist"
-                album_artist = author_name if entity_type == "album" else primary_artist
 
                 t_uri = item.get("uri", "")
                 t_id = t_uri.split(":")[-1] if ":" in t_uri else f"track_{idx}"
@@ -237,8 +320,8 @@ class SpotifyFetcher:
                     "title": t_title,
                     "artist": primary_artist,
                     "artists": artists,
-                    "album": album_name,
-                    "album_artist": album_artist,
+                    "album": title,
+                    "album_artist": author_name or primary_artist,
                     "track_number": idx,
                     "total_tracks": total,
                     "disc_number": 1,
@@ -249,6 +332,48 @@ class SpotifyFetcher:
                     "spotify_id": t_id,
                     "spotify_url": f"https://open.spotify.com/track/{t_id}" if t_id else ""
                 })
+        else:
+            # Playlist entity - resolve the true original studio album for each song in parallel
+            total = len(raw_tracks)
+            
+            def enrich_item(args):
+                idx, item = args
+                t_title = item.get("title") or "Unknown Track"
+                t_artist_raw = item.get("subtitle") or author_name or "Unknown Artist"
+                artists = [a.strip() for a in t_artist_raw.split(",") if a.strip()]
+                primary_artist = artists[0] if artists else t_artist_raw
+
+                t_uri = item.get("uri", "")
+                t_id = t_uri.split(":")[-1] if ":" in t_uri else f"track_{idx}"
+
+                # Resolve true original album metadata
+                alb_meta = self.resolve_track_album(
+                    artist=primary_artist,
+                    title=t_title,
+                    spotify_id=t_id,
+                    fallback_cover=cover_url,
+                    fallback_date=default_release_date
+                )
+
+                return {
+                    "title": t_title,
+                    "artist": primary_artist,
+                    "artists": artists,
+                    "album": alb_meta.get("album", f"{t_title} - Single"),
+                    "album_artist": alb_meta.get("album_artist", primary_artist),
+                    "track_number": alb_meta.get("track_number", idx),
+                    "total_tracks": alb_meta.get("total_tracks", 1),
+                    "disc_number": 1,
+                    "release_date": alb_meta.get("release_date") or default_release_date,
+                    "year": alb_meta.get("year") or default_year,
+                    "duration_ms": item.get("duration", 0),
+                    "cover_url": alb_meta.get("cover_url") or cover_url,
+                    "spotify_id": t_id,
+                    "spotify_url": f"https://open.spotify.com/track/{t_id}" if t_id else ""
+                }
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                tracks = list(executor.map(enrich_item, enumerate(raw_tracks, start=1)))
 
         return {
             "type": entity_type,
@@ -685,17 +810,37 @@ class SpotifyPlexampPipeline:
 
             t_title = track.get("title", "Unknown Track")
             t_artist = track.get("artist", "Unknown Artist")
-            t_album = track.get("album", "Spotify Music")
+            t_album = track.get("album", "")
             t_num = track.get("track_number", idx)
             track_index = track.get("_track_index", idx)
 
-            self.log(f"[{idx}/{total_selected}] Searching & downloading: {t_artist} - {t_title}")
+            # Ensure track has its true original album metadata
+            if not t_album or t_album in ["Spotify Playlist", "Spotify Collection", "Singles"]:
+                resolved = SpotifyFetcher.resolve_track_album(
+                    artist=t_artist,
+                    title=t_title,
+                    spotify_id=track.get("spotify_id"),
+                    fallback_cover=track.get("cover_url", ""),
+                    fallback_date=track.get("release_date", "")
+                )
+                t_album = resolved.get("album", f"{t_title} - Single")
+                track["album"] = t_album
+                track["album_artist"] = resolved.get("album_artist", track.get("album_artist", t_artist))
+                track["track_number"] = resolved.get("track_number", t_num)
+                track["total_tracks"] = resolved.get("total_tracks", track.get("total_tracks", 1))
+                track["release_date"] = resolved.get("release_date", track.get("release_date", ""))
+                track["year"] = resolved.get("year", track.get("year", ""))
+                if resolved.get("cover_url"):
+                    track["cover_url"] = resolved.get("cover_url")
+                t_num = track["track_number"]
+
+            self.log(f"[{idx}/{total_selected}] Searching & downloading: {t_artist} - {t_title} (Album: {t_album})")
             self.progress_cb(float(idx - 1) / total_selected, f"[{idx}/{total_selected}] {t_artist} - {t_title}")
             if self.track_status_cb:
                 self.track_status_cb(track_index, "Downloading...", "#38BDF8")
 
             # 1. Determine destination paths
-            clean_artist = sanitize_filename(t_artist)
+            clean_artist = sanitize_filename(track.get("album_artist") or t_artist)
             clean_album = sanitize_filename(t_album)
             clean_title = sanitize_filename(t_title)
             ext = "flac" if "flac" in audio_format.lower() else ("m4a" if "m4a" in audio_format.lower() else "mp3")

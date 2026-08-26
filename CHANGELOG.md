@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- embed original album track numbers and display original track index in UI (818dd1b)
+
+### Added
 - resolve true original studio albums and high-res artwork for all tracks (c1c90f9)
 
 ### Fixed

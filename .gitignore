@@ -1,0 +1,62 @@
+# Environment & Secrets
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large Binaries, Archives & Build Outputs
+*.rar
+*.zip
+*.7z
+*.tar.gz
+*.pkg
+*.exe
+*.dll
+*.dmg
+*.app
+*.pak
+*.dat
+*.bin
+*.pdb
+build/
+dist/
+release/
+out/
+dist-electron/
+deploy/
+.netlify/
+
+# Python Virtual Environments & Cache
+__pycache__/
+*.py[cod]
+*.class
+*.pyd
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+.eggs/
+
+# Databases, Cache & Logs
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+cache.db*
+error_log.json
+*.log

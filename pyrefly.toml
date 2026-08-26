@@ -1,0 +1,10 @@
+project-includes = ["."]
+project-excludes = [
+    "**/_pyrefly_virtual_/**",
+    "C:/_pyrefly_virtual_/**",
+    "C:\\_pyrefly_virtual_\\**",
+    "**/build/**",
+    "**/dist/**",
+    "**/.venv/**",
+    "**/app_backup_*.py"
+]

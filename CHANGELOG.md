@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- docs: add comprehensive README, CHANGELOG, and automated daily docs workflow (93ae246)
+
 ### Added
 - add real-time track status badges, update yt-dlp downloader configuration, and include launcher scripts (6491579)
 - implement per-track status badges, add automated batch execution scripts, and update configuration settings. (4354f53)

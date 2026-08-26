@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- eliminate duplicate tray icon initialization (002af06)
+
 ### Added
 - auto-save target directories to settings.json on typing, paste, browse, or focus loss (fce31d8)
 

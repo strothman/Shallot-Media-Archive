@@ -584,19 +584,29 @@ class SpotifyFetcher:
             images = plist.get("images", [])
             plist_cover = images[0].get("url") if images else ""
 
-            # Fetch tracks (supports pagination)
+            # Fetch tracks (supports pagination using 2026 /items endpoint with /tracks fallback)
             tracks = []
-            tracks_url = f"{base_api}/playlists/{entity_id}/tracks?limit=100"
+            tracks_url = f"{base_api}/playlists/{entity_id}/items?limit=100"
             track_idx = 1
 
             while tracks_url:
                 req_t = urllib.request.Request(tracks_url, headers=headers)
-                with urllib.request.urlopen(req_t, context=self._ssl_ctx, timeout=10) as resp_t:
-                    t_data = json.loads(resp_t.read().decode('utf-8'))
+                try:
+                    with urllib.request.urlopen(req_t, context=self._ssl_ctx, timeout=10) as resp_t:
+                        t_data = json.loads(resp_t.read().decode('utf-8'))
+                except Exception as e:
+                    # Fallback to legacy /tracks endpoint if /items is unsupported
+                    if "/items" in tracks_url:
+                        tracks_url = tracks_url.replace("/items", "/tracks")
+                        req_fallback = urllib.request.Request(tracks_url, headers=headers)
+                        with urllib.request.urlopen(req_fallback, context=self._ssl_ctx, timeout=10) as resp_t:
+                            t_data = json.loads(resp_t.read().decode('utf-8'))
+                    else:
+                        raise e
                 
                 items = t_data.get("items", [])
                 for entry in items:
-                    track_item = entry.get("track")
+                    track_item = entry.get("item") or entry.get("track")
                     if not track_item or not track_item.get("id"):
                         continue
 

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- launch run.bat silently with pythonw and auto-close console prompt (c0e6a47)
+
 ### Added
 - apply Plexamp Artist/Album/XX-Title naming hierarchy to Universal Downloader audio mode (1e4fc10)
 

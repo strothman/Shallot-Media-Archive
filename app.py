@@ -1099,18 +1099,23 @@ class DownloaderApp(ctk.CTk):
             if tb is not None:
                 tb.HrInit()
                 self.taskbar = tb
-        except Exception as e:
-            print("Taskbar progress init failed:", e)
+        except Exception:
+            self.taskbar = None
             
         self.tray_icon = None
         self.setup_tray()
         
         self.apply_theme(saved_theme)
+        self.select_tab("download")
         
         self.after(100, lambda: self.update_taskbar_progress(0))
         
         self.bind("<Unmap>", self.on_minimize)
         self.protocol("WM_DELETE_WINDOW", self.close_to_tray)
+        
+        # Bring window to front
+        self.lift()
+        self.focus_force()
 
     # =========================================================================
     # --- Helper & Utility Methods ---
@@ -2194,7 +2199,13 @@ class DownloaderApp(ctk.CTk):
             self.spotify_status_lbl.configure(text="Please fetch a Spotify playlist first.", text_color="#FB7185")
             return
 
-        selected_tracks = [item["track"] for item in self.spotify_track_items if item["var"].get() == 1]
+        selected_tracks = []
+        for idx, item in enumerate(self.spotify_track_items):
+            if item["var"].get() == 1:
+                t = dict(item["track"])
+                t["_track_index"] = idx
+                selected_tracks.append(t)
+
         if not selected_tracks:
             self.spotify_status_lbl.configure(text="No tracks selected. Check at least one song.", text_color="#FB7185")
             return
@@ -2225,11 +2236,17 @@ class DownloaderApp(ctk.CTk):
             self.after(0, lambda: self.spotify_status_lbl.configure(text=status_text))
             self.after(0, lambda: self.update_taskbar_progress(int(pct * 100)))
 
+        def track_status_cb(track_index: int, text: str, color: str):
+            if track_index < len(self.spotify_track_items):
+                badge = self.spotify_track_items[track_index]["status_badge"]
+                self.after(0, lambda b=badge, t=text, c=color: b.configure(text=t, text_color=c))
+
         self.spotify_pipeline = SpotifyPlexampPipeline(
             yt_dlp_path=yt_dlp_path,
             cookie_args=cookie_args,
             log_callback=log_cb,
-            progress_callback=progress_cb
+            progress_callback=progress_cb,
+            track_status_callback=track_status_cb
         )
 
         def run_pipeline():

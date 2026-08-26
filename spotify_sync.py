@@ -619,12 +619,14 @@ class SpotifyPlexampPipeline:
         yt_dlp_path: str,
         cookie_args: List[str],
         log_callback: Callable[[str, bool], None],
-        progress_callback: Callable[[float, str], None]
+        progress_callback: Callable[[float, str], None],
+        track_status_callback: Optional[Callable[[int, str, str], None]] = None
     ):
         self.yt_dlp_path = yt_dlp_path
         self.cookie_args = cookie_args
         self.log = log_callback
         self.progress_cb = progress_callback
+        self.track_status_cb = track_status_callback
         self.is_cancelled = False
         self.active_proc: Optional[subprocess.Popen] = None
 
@@ -674,6 +676,8 @@ class SpotifyPlexampPipeline:
             collection_cover_path = os.path.join(temp_dir, f"collection_cover_{collection.get('id')}.jpg")
             PlexampTagger.download_cover_art(collection.get("cover_url", ""), collection_cover_path)
 
+        app_dir = os.path.dirname(self.yt_dlp_path)
+
         for idx, track in enumerate(selected_tracks, start=1):
             if self.is_cancelled:
                 self.log("🛑 Download pipeline cancelled by user.")
@@ -683,9 +687,12 @@ class SpotifyPlexampPipeline:
             t_artist = track.get("artist", "Unknown Artist")
             t_album = track.get("album", "Spotify Music")
             t_num = track.get("track_number", idx)
+            track_index = track.get("_track_index", idx)
 
             self.log(f"[{idx}/{total_selected}] Searching & downloading: {t_artist} - {t_title}")
             self.progress_cb(float(idx - 1) / total_selected, f"[{idx}/{total_selected}] {t_artist} - {t_title}")
+            if self.track_status_cb:
+                self.track_status_cb(track_index, "Downloading...", "#38BDF8")
 
             # 1. Determine destination paths
             clean_artist = sanitize_filename(t_artist)
@@ -709,6 +716,8 @@ class SpotifyPlexampPipeline:
             # Check if file already exists
             if os.path.exists(final_file_path) and os.path.getsize(final_file_path) > 100000:
                 self.log(f"✓ Already exists in Plex library: {dest_filename}")
+                if self.track_status_cb:
+                    self.track_status_cb(track_index, "✓ Exists", "#4ADE80")
                 stats["completed"] += 1
                 continue
 
@@ -733,7 +742,6 @@ class SpotifyPlexampPipeline:
                             pass
 
             # 3. Search and Download from YouTube
-            # Optimal query: "{artist} - {title} audio" or "{artist} - {title}"
             search_query = f"{t_artist} - {t_title} audio"
             temp_output_template = os.path.join(temp_dir, f"dl_{idx}_%(id)s.%(ext)s")
 
@@ -742,7 +750,9 @@ class SpotifyPlexampPipeline:
                 self.yt_dlp_path,
                 "--newline",
                 "--no-playlist",
-                "-f", "ba",
+                "--extractor-args", "youtube:player_client=mweb,web",
+                "--ffmpeg-location", app_dir,
+                "-f", "ba/b",
                 "--extract-audio",
                 "--audio-format", ext,
                 "--audio-quality", aq,
@@ -771,7 +781,7 @@ class SpotifyPlexampPipeline:
                                 self.progress_cb(overall_pct, f"[{idx}/{total_selected}] Downloading {pct:.0f}%: {t_title}")
                             except Exception:
                                 pass
-                    elif "ERROR:" in line_clean:
+                    elif "ERROR:" in line_clean and "HTTP Error 403" not in line_clean:
                         self.log(f"⚠️ {line_clean}", is_error=True)
 
                 self.active_proc.wait()
@@ -780,6 +790,8 @@ class SpotifyPlexampPipeline:
 
                 if self.active_proc.returncode != 0:
                     self.log(f"❌ Failed to download '{t_title}' from YouTube.", is_error=True)
+                    if self.track_status_cb:
+                        self.track_status_cb(track_index, "❌ Failed", "#FB7185")
                     stats["failed"] += 1
                     continue
 
@@ -792,6 +804,8 @@ class SpotifyPlexampPipeline:
 
                 if not downloaded_file or not os.path.exists(downloaded_file):
                     self.log(f"❌ Downloaded audio file not found for '{t_title}'.", is_error=True)
+                    if self.track_status_cb:
+                        self.track_status_cb(track_index, "❌ Missing", "#FB7185")
                     stats["failed"] += 1
                     continue
 
@@ -805,10 +819,14 @@ class SpotifyPlexampPipeline:
                     PlexampTagger.apply_metadata(final_file_path, track, None)
 
                 self.log(f"✓ Successfully tagged for Plexamp: {dest_filename}")
+                if self.track_status_cb:
+                    self.track_status_cb(track_index, "✓ Done", "#4ADE80")
                 stats["completed"] += 1
 
             except Exception as e:
                 self.log(f"❌ Error processing '{t_title}': {e}", is_error=True)
+                if self.track_status_cb:
+                    self.track_status_cb(track_index, "❌ Error", "#FB7185")
                 stats["failed"] += 1
 
         # Clean up temp folder

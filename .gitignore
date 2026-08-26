@@ -60,3 +60,12 @@ ENV/
 cache.db*
 error_log.json
 *.log
+downloader_errors.txt
+cookies.txt
+
+# Application Temp & Scratch Files
+scratch/
+temp_*.jpg
+temp_*.png
+temp_ffmpeg/
+

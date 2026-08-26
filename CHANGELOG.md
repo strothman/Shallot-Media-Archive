@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- make batch and vbs launchers robust with absolute pathing (6b551a1)
+
 ### Changed
 - chore: rename application to Shallot Media Archive (b3c45bc)
 

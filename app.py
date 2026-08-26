@@ -30,7 +30,7 @@ ctk.set_default_color_theme("blue")
 class DownloaderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Strothman Media Archive")
+        self.title("Shallot Media Archive")
         
         # --- Process & Lifecycle Management ---
         self.active_process = None
@@ -1212,7 +1212,7 @@ class DownloaderApp(ctk.CTk):
             self.tray_icon = pystray.Icon(
                 "SMArchive",
                 icon_image,
-                "Strothman Media Archive",
+                "Shallot Media Archive",
                 menu
             )
             
@@ -1474,7 +1474,7 @@ class DownloaderApp(ctk.CTk):
                 with open(log_file, "w", encoding="utf-8") as f:
                     from datetime import datetime
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    f.write(f"[{timestamp}] Strothman Media Archive error log initialized.\n")
+                    f.write(f"[{timestamp}] Shallot Media Archive error log initialized.\n")
             try:
                 os.startfile(log_file)
             except Exception:

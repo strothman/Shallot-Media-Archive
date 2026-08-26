@@ -29,13 +29,13 @@ VSVersionInfo(
       [
       StringTable(
         '040904B0',
-        [StringStruct('CompanyName', 'Strothman Media'),
-        StringStruct('FileDescription', 'Strothman Media Archive Downloader'),
-        StringStruct('FileVersion', '1.0.1.0'),
+        [StringStruct('CompanyName', 'Shallot Media'),
+        StringStruct('FileDescription', 'Shallot Media Archive Downloader'),
+        StringStruct('FileVersion', '1.1.0.0'),
         StringStruct('InternalName', 'SMArchive'),
-        StringStruct('LegalCopyright', 'Copyright (c) 2026 Strothman Media'),
+        StringStruct('LegalCopyright', 'Copyright (c) 2026 Shallot Media'),
         StringStruct('OriginalFilename', 'SMArchive.exe'),
-        StringStruct('ProductName', 'Strothman Media Archive'),
+        StringStruct('ProductName', 'Shallot Media Archive'),
         StringStruct('ProductVersion', '1.0.1.0')])
       ]), 
     VarFileInfo([VarStruct('Translation', [1033, 1200])])

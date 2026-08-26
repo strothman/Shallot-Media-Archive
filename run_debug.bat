@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
 echo ==============================================
-echo   Strothman Media Archive (Debug Launcher)
+echo   Shallot Media Archive (Debug Launcher)
 echo ==============================================
 echo.
 

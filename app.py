@@ -1805,14 +1805,22 @@ class DownloaderApp(ctk.CTk):
         if self.metadata_switch.get():
             command.extend(["--embed-metadata", "--embed-thumbnail", "--embed-chapters"])
         
-        # Filename Template with optional Upload Date
-        use_date = bool(self.date_switch.get())
-        if season is not None:
-            date_prefix = "%(upload_date>%Y-%m-%d)s - " if use_date else ""
-            command.extend(["-o", f"%(playlist_title,uploader)s/{date_prefix}%(autonumber)03d - %(title)s.%(ext)s", url])
+        # Filename & Folder Template
+        if self.audio_switch.get():
+            # Plexamp Standard Music Hierarchy: Artist / Album / 01 - Title.ext
+            if season is not None:
+                command.extend(["-o", "%(artist,album_artist,creator,uploader)s/%(album,playlist_title,uploader)s/%(autonumber)02d - %(title)s.%(ext)s", url])
+            else:
+                command.extend(["-o", "%(artist,album_artist,creator,uploader)s/%(album,playlist_title,uploader)s/%(playlist_index&{:02d} - |)s%(title)s.%(ext)s", url])
         else:
-            date_prefix = "[%(upload_date>%Y-%m-%d)s] " if use_date else ""
-            command.extend(["-o", f"%(playlist_title,uploader)s/{date_prefix}%(title)s.%(ext)s", url])
+            # Video Hierarchy with optional Upload Date
+            use_date = bool(self.date_switch.get())
+            if season is not None:
+                date_prefix = "%(upload_date>%Y-%m-%d)s - " if use_date else ""
+                command.extend(["-o", f"%(playlist_title,uploader)s/{date_prefix}%(autonumber)03d - %(title)s.%(ext)s", url])
+            else:
+                date_prefix = "[%(upload_date>%Y-%m-%d)s] " if use_date else ""
+                command.extend(["-o", f"%(playlist_title,uploader)s/{date_prefix}%(title)s.%(ext)s", url])
 
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
         self.active_process = process

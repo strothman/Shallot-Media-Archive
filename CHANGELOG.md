@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- refactor: resolve all linter warnings and fix exception closure variable (e1b9fd7)
+
 ### Added
 - embed original album track numbers and display original track index in UI (818dd1b)
 

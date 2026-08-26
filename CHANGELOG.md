@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- add licensing, implement process throttling, improve tracklist rendering performance, and add clear completed functionality (8b5de11)
+
+### Changed
+- Merge branch 'main' of https://github.com/strothman/util-SMArchive (79dcbd9)
+
 ### Fixed
 - support Spotify 2026 /items endpoint for unlimited playlist track pagination (bfafde7)
 

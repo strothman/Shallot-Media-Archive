@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- resolve true original studio albums and high-res artwork for all tracks (c1c90f9)
+
 ### Fixed
 - make batch and vbs launchers robust with absolute pathing (6b551a1)
 

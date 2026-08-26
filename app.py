@@ -1177,16 +1177,10 @@ class DownloaderApp(ctk.CTk):
         except Exception:
             self.taskbar = None
             
-        self.tray_icon = None
-        self.setup_tray()
-        
         self.apply_theme(saved_theme)
         self.select_tab("download")
         
         self.after(100, lambda: self.update_taskbar_progress(0))
-        
-        self.bind("<Unmap>", self.on_minimize)
-        self.protocol("WM_DELETE_WINDOW", self.close_to_tray)
         
         # Bring window to front
         self.lift()
@@ -1264,58 +1258,6 @@ class DownloaderApp(ctk.CTk):
             subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd], creationflags=subprocess.CREATE_NO_WINDOW)
         except Exception:
             pass
-
-    def on_minimize(self, event):
-        if self.state() == "iconic":
-            self.withdraw()
-
-    def setup_tray(self):
-        try:
-            import pystray
-            
-            icon_path = self.get_file_path("icon.ico")
-            if os.path.exists(icon_path):
-                icon_image = Image.open(icon_path)
-            else:
-                icon_image = Image.new('RGB', (64, 64), color='#FF5722')
-                
-            menu = pystray.Menu(
-                pystray.MenuItem("Show Window", self.show_window_from_tray, default=True),
-                pystray.MenuItem("Exit", self.exit_app_from_tray)
-            )
-            
-            self.tray_icon = pystray.Icon(
-                "SMArchive",
-                icon_image,
-                "Shallot Media Archive",
-                menu
-            )
-            
-            threading.Thread(target=self.tray_icon.run, daemon=True).start()
-        except Exception as e:
-            print("Failed to initialize tray icon:", e)
-
-    def show_window_from_tray(self, icon=None, item=None):
-        self.deiconify()
-        self.state("normal")
-        self.focus_force()
-
-    def exit_app_from_tray(self, icon=None, item=None):
-        self.emergency_process_cleanup()
-        if self.tray_icon:
-            try:
-                self.tray_icon.stop()
-            except Exception:
-                pass
-        self.destroy()
-        sys.exit(0)
-
-    def close_to_tray(self):
-        if self.active_process:
-            self.withdraw()
-            self.log("Downloader running in background. Double-click tray icon to restore.")
-        else:
-            self.exit_app_from_tray()
 
     def get_hwnd(self):
         try:

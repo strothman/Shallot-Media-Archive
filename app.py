@@ -23,6 +23,12 @@ for path in [base_path, exe_dir]:
     if path and os.path.abspath(path) not in [os.path.abspath(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]:
         os.environ["PATH"] = os.path.abspath(path) + os.pathsep + os.environ.get("PATH", "")
 
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+CREATION_FLAGS_BACKGROUND = (
+    (subprocess.CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
+    if os.name == 'nt' else 0
+)
+
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -731,10 +737,21 @@ class DownloaderApp(ctk.CTk):
         self.spotify_track_count_lbl.pack(side="left", padx=12)
         self.theme_labels_secondary.append(self.spotify_track_count_lbl)
 
+        self.btn_spotify_clear_completed = ctk.CTkButton(
+            tracks_header,
+            text="Clear Completed",
+            width=95,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=self.clear_completed_spotify_tracks
+        )
+        self.btn_spotify_clear_completed.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_spotify_clear_completed)
+
         self.btn_spotify_deselect_all = ctk.CTkButton(
             tracks_header,
             text="Deselect All",
-            width=80,
+            width=75,
             height=24,
             font=("Segoe UI", 9, "bold"),
             command=lambda: self.toggle_all_spotify_tracks(False)
@@ -745,7 +762,7 @@ class DownloaderApp(ctk.CTk):
         self.btn_spotify_select_all = ctk.CTkButton(
             tracks_header,
             text="Select All",
-            width=70,
+            width=65,
             height=24,
             font=("Segoe UI", 9, "bold"),
             command=lambda: self.toggle_all_spotify_tracks(True)
@@ -2201,7 +2218,7 @@ class DownloaderApp(ctk.CTk):
 
             threading.Thread(target=load_cover, daemon=True).start()
 
-        # Populate Tracklist
+        # Populate Tracklist smoothly in non-blocking slices
         for widget in self.spotify_track_scroll.winfo_children():
             widget.destroy()
 
@@ -2216,73 +2233,110 @@ class DownloaderApp(ctk.CTk):
         raw_org = self.spotify_org_menu.get()
         folder_struct = "playlist_folder" if "Playlist Folder" in raw_org else "plex_standard"
 
-        for idx, track in enumerate(tracks, start=1):
-            row_frame = ctk.CTkFrame(self.spotify_track_scroll, fg_color=input_bg, border_color=border_col, border_width=1, corner_radius=6, height=36)
-            row_frame.pack(fill="x", padx=4, pady=2)
-            row_frame.pack_propagate(False)
+        batch_size = 40
 
-            chk_var = ctk.IntVar(value=1)
-            chk = ctk.CTkCheckBox(
-                row_frame,
-                text="",
-                variable=chk_var,
-                width=20,
-                height=20,
-                corner_radius=4,
-                command=self.update_spotify_selected_count
-            )
-            chk.pack(side="left", padx=(8, 4), pady=4)
+        def render_chunk(start_idx=0):
+            end_idx = min(start_idx + batch_size, total_count)
+            for idx in range(start_idx + 1, end_idx + 1):
+                track = tracks[idx - 1]
+                row_frame = ctk.CTkFrame(self.spotify_track_scroll, fg_color=input_bg, border_color=border_col, border_width=1, corner_radius=6, height=36)
+                row_frame.pack(fill="x", padx=4, pady=2)
+                row_frame.pack_propagate(False)
 
-            num_lbl = ctk.CTkLabel(row_frame, text=f"{idx:02d}.", font=("Segoe UI", 10, "bold"), text_color=text_sec, width=24, anchor="e")
-            num_lbl.pack(side="left", padx=(0, 6))
+                chk_var = ctk.IntVar(value=1)
+                chk = ctk.CTkCheckBox(
+                    row_frame,
+                    text="",
+                    variable=chk_var,
+                    width=20,
+                    height=20,
+                    corner_radius=4,
+                    command=self.update_spotify_selected_count
+                )
+                chk.pack(side="left", padx=(8, 4), pady=4)
 
-            orig_num = int(track.get("track_number", idx))
-            t_album = track.get("album", "")
-            t_title = track.get("title", "Unknown")
-            t_artist = track.get("artist", "Unknown")
+                num_lbl = ctk.CTkLabel(row_frame, text=f"{idx:02d}.", font=("Segoe UI", 10, "bold"), text_color=text_sec, width=24, anchor="e")
+                num_lbl.pack(side="left", padx=(0, 6))
 
-            title_text = f"{t_title} - {t_artist}"
-            if t_album and t_album not in ["Spotify Playlist", "Spotify Collection"]:
-                title_text += f"   [Trk #{orig_num:02d} • {t_album}]"
+                orig_num = int(track.get("track_number", idx))
+                t_album = track.get("album", "")
+                t_title = track.get("title", "Unknown")
+                t_artist = track.get("artist", "Unknown")
 
-            if len(title_text) > 75:
-                title_text = title_text[:72] + "..."
+                title_text = f"{t_title} - {t_artist}"
+                if t_album and t_album not in ["Spotify Playlist", "Spotify Collection"]:
+                    title_text += f"   [Trk #{orig_num:02d} • {t_album}]"
 
-            title_lbl = ctk.CTkLabel(row_frame, text=title_text, font=("Segoe UI", 10), text_color="#F5F5F7", anchor="w")
-            title_lbl.pack(side="left", fill="x", expand=True, padx=4)
+                if len(title_text) > 75:
+                    title_text = title_text[:72] + "..."
 
-            dur_ms = track.get("duration_ms", 0)
-            mins = int((dur_ms / 1000) // 60)
-            secs = int((dur_ms / 1000) % 60)
-            dur_str = f"{mins}:{secs:02d}" if dur_ms > 0 else ""
-            dur_lbl = ctk.CTkLabel(row_frame, text=dur_str, font=("Segoe UI", 9), text_color=text_sec, width=40, anchor="e")
-            dur_lbl.pack(side="left", padx=(0, 8))
+                title_lbl = ctk.CTkLabel(row_frame, text=title_text, font=("Segoe UI", 10), text_color="#F5F5F7", anchor="w")
+                title_lbl.pack(side="left", fill="x", expand=True, padx=4)
 
-            # Pre-check if already exists in library
-            is_in_lib = SpotifyPlexampPipeline.check_existing_track(
-                dest_folder, track, self.spotify_collection, audio_fmt, folder_struct
-            )
-            init_status = "✓ In Library" if is_in_lib else "Ready"
-            init_color = "#4ADE80" if is_in_lib else "#78909C"
+                dur_ms = track.get("duration_ms", 0)
+                mins = int((dur_ms / 1000) // 60)
+                secs = int((dur_ms / 1000) % 60)
+                dur_str = f"{mins}:{secs:02d}" if dur_ms > 0 else ""
+                dur_lbl = ctk.CTkLabel(row_frame, text=dur_str, font=("Segoe UI", 9), text_color=text_sec, width=40, anchor="e")
+                dur_lbl.pack(side="left", padx=(0, 8))
 
-            status_badge = ctk.CTkLabel(row_frame, text=init_status, font=("Segoe UI", 9, "bold"), text_color=init_color, width=75, anchor="e")
-            status_badge.pack(side="right", padx=(0, 10))
+                # Pre-check if already exists in library
+                try:
+                    is_in_lib = SpotifyPlexampPipeline.check_existing_track(
+                        dest_folder, track, self.spotify_collection, audio_fmt, folder_struct
+                    )
+                except Exception:
+                    is_in_lib = False
+                init_status = "✓ In Library" if is_in_lib else "Ready"
+                init_color = "#4ADE80" if is_in_lib else "#78909C"
 
-            self.spotify_track_items.append({
-                "track": track,
-                "var": chk_var,
-                "row_frame": row_frame,
-                "status_badge": status_badge,
-                "checkbox": chk
-            })
+                status_badge = ctk.CTkLabel(row_frame, text=init_status, font=("Segoe UI", 9, "bold"), text_color=init_color, width=75, anchor="e")
+                status_badge.pack(side="right", padx=(0, 10))
 
-        self.update_spotify_selected_count()
-        self.spotify_status_lbl.configure(text=f"Loaded {total_count} songs. Select songs and click 'Download & Tag'.", text_color=getattr(self, 'theme_cfg', {}).get("text_primary", "#F5F5F7"))
+                self.spotify_track_items.append({
+                    "track": track,
+                    "var": chk_var,
+                    "row_frame": row_frame,
+                    "status_badge": status_badge,
+                    "checkbox": chk
+                })
+
+            self.update_spotify_selected_count()
+            if end_idx < total_count:
+                self.spotify_status_lbl.configure(text=f"Loading tracklist... ({end_idx}/{total_count})", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
+                self.after(2, lambda: render_chunk(end_idx))
+            else:
+                self.spotify_status_lbl.configure(text=f"Loaded {total_count} songs. Select songs and click 'Download & Tag'.", text_color=getattr(self, 'theme_cfg', {}).get("text_primary", "#F5F5F7"))
+
+        render_chunk(0)
 
     def toggle_all_spotify_tracks(self, select_all: bool):
         for item in self.spotify_track_items:
             item["var"].set(1 if select_all else 0)
         self.update_spotify_selected_count()
+
+    def clear_completed_spotify_tracks(self):
+        """ Removes tracks that are already in the Plex library or marked done from the view """
+        if not self.spotify_track_items:
+            return
+        remaining_items = []
+        for item in self.spotify_track_items:
+            status_text = item["status_badge"].cget("text")
+            if "✓" in status_text:
+                item["row_frame"].destroy()
+            else:
+                remaining_items.append(item)
+        self.spotify_track_items = remaining_items
+        self.update_spotify_selected_count()
+        if not self.spotify_track_items:
+            empty_lbl = ctk.CTkLabel(
+                self.spotify_track_scroll,
+                text="✓ All completed tracks cleared. All caught up!",
+                font=("Segoe UI", 11, "bold"),
+                text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF")
+            )
+            empty_lbl.pack(pady=30)
+            self.theme_labels_secondary.append(empty_lbl)
 
     def update_spotify_selected_count(self):
         selected = sum(1 for item in self.spotify_track_items if item["var"].get() == 1)

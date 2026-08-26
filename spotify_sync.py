@@ -23,6 +23,12 @@ from mutagen.id3 import (
 from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
 
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+CREATION_FLAGS_BACKGROUND = (
+    (subprocess.CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
+    if os.name == 'nt' else 0
+)
+
 
 def sanitize_filename(name: str, max_len: int = 120) -> str:
     """Removes invalid filesystem characters for Windows/Linux/macOS."""
@@ -720,6 +726,7 @@ class ReplayGainCalculator:
         try:
             cmd = [
                 ffmpeg_path,
+                "-threads", "2",
                 "-nostats",
                 "-i", file_path,
                 "-filter_complex", "ebur128=peak=true",
@@ -730,7 +737,7 @@ class ReplayGainCalculator:
                 cmd,
                 capture_output=True,
                 text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                creationflags=CREATION_FLAGS_BACKGROUND
             )
             out = res.stderr
             i_match = re.search(r'I:\s+([-\d.]+)\s+LUFS', out)
@@ -1179,8 +1186,8 @@ class SpotifyPlexampPipeline:
                 self.yt_dlp_path,
                 "--newline",
                 "--no-playlist",
-                "--extractor-args", "youtube:player_client=mweb,web",
                 "--ffmpeg-location", app_dir,
+                "--postprocessor-args", "ffmpeg:-threads 2",
                 "-f", "ba/b",
                 "--extract-audio",
                 "--audio-format", ext,
@@ -1195,7 +1202,7 @@ class SpotifyPlexampPipeline:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    creationflags=CREATION_FLAGS_BACKGROUND
                 )
                 with self._lock:
                     self.active_procs.append(proc)
@@ -1283,6 +1290,13 @@ class SpotifyPlexampPipeline:
                     self.progress_cb(pct, f"[{completed_count[0]}/{total_selected}] ✓ {t_title}")
                     if self.track_status_cb:
                         self.track_status_cb(track_index, "✓ Done", "#4ADE80")
+
+                # Polite pacing: prevents CPU bursts, GPU stalls, and YouTube anti-bot rate-limiting
+                import time, random
+                time.sleep(random.uniform(0.6, 1.2))
+                if seq_idx % 15 == 0:
+                    import gc
+                    gc.collect()
 
             except Exception as e:
                 with self._lock:

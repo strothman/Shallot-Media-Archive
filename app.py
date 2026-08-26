@@ -224,6 +224,8 @@ class DownloaderApp(ctk.CTk):
         )
         self.folder_input.insert(0, default_folder)
         self.folder_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.folder_input.bind("<FocusOut>", lambda e: self.save_setting("destination_folder", self.folder_input.get().strip()))
+        self.folder_input.bind("<KeyRelease>", lambda e: self.save_setting("destination_folder", self.folder_input.get().strip()))
         self.theme_entries.append(self.folder_input)
 
         self.browse_btn = ctk.CTkButton(
@@ -610,6 +612,8 @@ class DownloaderApp(ctk.CTk):
         self.spotify_folder_input = ctk.CTkEntry(fld_row, placeholder_text=r"C:\SMA-downloads\Music", height=28, fg_color="#070F15", border_color="#1F3A4E", text_color="#F5F5F7", font=("Segoe UI", 10))
         self.spotify_folder_input.insert(0, default_plex_dir)
         self.spotify_folder_input.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self.spotify_folder_input.bind("<FocusOut>", lambda e: self.save_setting("plex_music_folder", self.spotify_folder_input.get().strip()))
+        self.spotify_folder_input.bind("<KeyRelease>", lambda e: self.save_setting("plex_music_folder", self.spotify_folder_input.get().strip()))
         self.theme_entries.append(self.spotify_folder_input)
 
         self.btn_spotify_browse = ctk.CTkButton(fld_row, text="📂", width=32, height=28, font=("Segoe UI", 10, "bold"), command=self.browse_plex_folder)

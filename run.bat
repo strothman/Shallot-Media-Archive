@@ -1,19 +1,13 @@
 @echo off
-title Shallot Media Archive
 cd /d "%~dp0"
 
-if not exist "%~dp0.venv\Scripts\python.exe" (
-    echo [ERROR] Python virtual environment was not found at .venv!
-    echo Please make sure .venv exists.
+if not exist "%~dp0.venv\Scripts\pythonw.exe" (
+    echo [ERROR] Python environment was not found at .venv!
+    echo Please run installation first.
     pause
     exit /b 1
 )
 
-:: Launch Shallot Media Archive
-"%~dp0.venv\Scripts\python.exe" "%~dp0app.py"
-
-if errorlevel 1 (
-    echo.
-    echo [Application closed with an error code: %errorlevel%]
-    pause
-)
+:: Launch Shallot Media Archive with no console window
+start "" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0app.py"
+exit

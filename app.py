@@ -2152,11 +2152,17 @@ class DownloaderApp(ctk.CTk):
             num_lbl = ctk.CTkLabel(row_frame, text=f"{idx:02d}.", font=("Segoe UI", 10, "bold"), text_color=text_sec, width=24, anchor="e")
             num_lbl.pack(side="left", padx=(0, 6))
 
+            orig_num = int(track.get("track_number", idx))
+            t_album = track.get("album", "")
             t_title = track.get("title", "Unknown")
             t_artist = track.get("artist", "Unknown")
+
             title_text = f"{t_title} - {t_artist}"
-            if len(title_text) > 46:
-                title_text = title_text[:43] + "..."
+            if t_album and t_album not in ["Spotify Playlist", "Spotify Collection"]:
+                title_text += f"   [Trk #{orig_num:02d} • {t_album}]"
+
+            if len(title_text) > 75:
+                title_text = title_text[:72] + "..."
 
             title_lbl = ctk.CTkLabel(row_frame, text=title_text, font=("Segoe UI", 10), text_color="#F5F5F7", anchor="w")
             title_lbl.pack(side="left", fill="x", expand=True, padx=4)

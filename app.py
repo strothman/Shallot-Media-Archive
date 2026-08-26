@@ -13,6 +13,7 @@ import urllib.request
 
 import customtkinter as ctk
 from PIL import Image
+import pystray
 from spotify_sync import SpotifyFetcher, SpotifyPlexampPipeline
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
@@ -47,6 +48,11 @@ class DownloaderApp(ctk.CTk):
         icon_path = self.get_file_path("icon.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
+
+        # --- System Tray & Close Behavior ---
+        self.tray_icon = None
+        self.protocol("WM_DELETE_WINDOW", self.on_close_window)
+        self.init_system_tray()
 
         width, height = 960, 640
         x = (self.winfo_screenwidth() // 2) - (width // 2)
@@ -2683,6 +2689,64 @@ class DownloaderApp(ctk.CTk):
             self.saved_settings = current
         except Exception as e:
             print(f"Failed to save setting {key}:", e)
+
+
+    # =========================================================================
+    # --- System Tray & Lifecycle Engine ---
+    # =========================================================================
+
+    def init_system_tray(self):
+        """Initializes the background system tray icon for minimize-to-tray functionality."""
+        try:
+            icon_path = self.get_file_path("icon.ico")
+            if os.path.exists(icon_path):
+                img = Image.open(icon_path)
+            else:
+                img = Image.new('RGB', (64, 64), color='#00E5FF')
+
+            menu = pystray.Menu(
+                pystray.MenuItem("Open Shallot Media Archive", lambda icon, item: self.restore_from_tray(), default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Exit Application", lambda icon, item: self.quit_from_tray())
+            )
+
+            self.tray_icon = pystray.Icon("ShallotMediaArchive", img, "Shallot Media Archive", menu)
+            threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        except Exception as e:
+            print(f"[Tray] System tray init error: {e}")
+
+    def on_close_window(self):
+        """Intercepts window close event (X button) and minimizes to taskbar / system tray."""
+        self.withdraw()
+        self.send_notification("Shallot Media Archive", "Minimized to taskbar tray. Right-click the icon to exit.")
+
+    def restore_from_tray(self):
+        """Restores window from system tray back to desktop."""
+        self.after(0, self._restore_window_main_thread)
+
+    def _restore_window_main_thread(self):
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.focus_force()
+
+    def quit_from_tray(self):
+        """Exits the application cleanly from the system tray menu."""
+        if self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        self.after(0, self.quit_application)
+
+    def quit_application(self):
+        """Cleanly halts all background tasks and terminates the application."""
+        if hasattr(self, 'spotify_pipeline') and self.spotify_pipeline:
+            self.spotify_pipeline.cancel()
+        if self.active_process:
+            self.emergency_process_cleanup()
+        self.destroy()
+        os._exit(0)
 
 
 if __name__ == "__main__":

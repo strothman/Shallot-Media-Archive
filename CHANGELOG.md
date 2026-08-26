@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- remember previous folder selection on app close or exit (5d114ef)
+
+### Changed
+- chore: stop tracking local settings.json (0520b18)
+
 ### Fixed
 - eliminate duplicate tray icon initialization (002af06)
 

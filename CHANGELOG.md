@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- position SpotifyFetcher fetch_entity method properly (d6d2a73)
+
 ### Added
 - add 1-click Spotify OAuth connect to unlock full 700+ song playlists (ebfaec0)
 

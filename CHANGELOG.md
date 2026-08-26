@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- add 1-click Spotify OAuth connect to unlock full 700+ song playlists (ebfaec0)
+
+### Added
 - remember previous folder selection on app close or exit (5d114ef)
 
 ### Changed

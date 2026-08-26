@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- chore: rename application to Shallot Media Archive (b3c45bc)
+
+### Changed
 - docs: add comprehensive README, CHANGELOG, and automated daily docs workflow (93ae246)
 
 ### Added

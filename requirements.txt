@@ -10,4 +10,5 @@ pywin32-ctypes==0.2.3
 comtypes==1.4.16
 pystray==0.19.5
 six==1.17.0
+mutagen==1.48.1
 

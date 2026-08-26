@@ -2669,8 +2669,23 @@ class DownloaderApp(ctk.CTk):
         except Exception as e:
             print(f"[Tray] System tray init error: {e}")
 
+    def persist_current_state(self):
+        """Saves dynamic UI inputs so previous selections are remembered on next launch."""
+        try:
+            if hasattr(self, 'folder_input'):
+                val = self.folder_input.get().strip()
+                if val:
+                    self.save_setting("destination_folder", val)
+            if hasattr(self, 'spotify_folder_input'):
+                val = self.spotify_folder_input.get().strip()
+                if val:
+                    self.save_setting("plex_music_folder", val)
+        except Exception:
+            pass
+
     def on_close_window(self):
-        """Intercepts window close event (X button) and minimizes to taskbar / system tray."""
+        """Intercepts window close event (X button), saves current selection, and minimizes to tray."""
+        self.persist_current_state()
         self.withdraw()
         self.send_notification("Shallot Media Archive", "Minimized to taskbar tray. Right-click the icon to exit.")
 
@@ -2694,7 +2709,8 @@ class DownloaderApp(ctk.CTk):
         self.after(0, self.quit_application)
 
     def quit_application(self):
-        """Cleanly halts all background tasks and terminates the application."""
+        """Cleanly halts all background tasks, saves previous selections, and terminates."""
+        self.persist_current_state()
         if hasattr(self, 'spotify_pipeline') and self.spotify_pipeline:
             self.spotify_pipeline.cancel()
         if self.active_process:

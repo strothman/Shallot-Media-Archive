@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- implement acoustic fingerprinting and metadata verification module for audio library integrity (a9babbb)
+
 ### Changed
 - refactor: remove obsolete backup files and temporary assets from project directory (cbc0b9f)
 

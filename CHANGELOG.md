@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- implement YouTube sync module with automatic title cleaning and metadata enrichment (9900a08)
+
+### Changed
+- Merge branch 'main' of https://github.com/strothman/util-SMArchive and resolve CHANGELOG.md (79b8ad5)
+- Merge branch 'main' of https://github.com/strothman/util-SMArchive (79dcbd9)
+
+### Added
 - **Local to Plexamp Organizer & Tagger**:
   - Full-featured section for scanning, cleaning, tagging, and organizing local audio files (`.mp3`, `.flac`, `.m4a`, `.wav`, `.aac`, `.ogg`, `.opus`, `.wma`) directly into Plexamp.
   - Recursive directory traversal with embedded tag extraction and smart filename parsing.

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- chore: add shallot icon and update verifier cache with new track metadata (b1bd3c4)
+
 ### Added
 - implement persistent audio verification cache to optimize status lookups (5bd5a13)
 

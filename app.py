@@ -70,6 +70,7 @@ class DownloaderApp(ctk.CTk):
         self.verifier_is_scanning = False
         self.verifier_cancel_event = threading.Event()
         self.verifier_filter_mode = "all"
+        self.verifier_active_workers = {}
 
         # --- Custom Window Icon ---
         icon_path = self.get_file_path("icon.ico")
@@ -1691,8 +1692,35 @@ class DownloaderApp(ctk.CTk):
             height=18
         )
         self.verifier_art_switch.select()
-        self.verifier_art_switch.pack(side="left", padx=(0, 15))
+        self.verifier_art_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_art_switch)
+
+        self.verifier_cache_switch = ctk.CTkSwitch(
+            v_opts_row,
+            text="Fast Resume (Cache)",
+            font=("Segoe UI", 9),
+            width=140,
+            height=18
+        )
+        self.verifier_cache_switch.select()
+        self.verifier_cache_switch.pack(side="left", padx=(0, 10))
+        self.theme_switches.append(self.verifier_cache_switch)
+
+        self.btn_verifier_clear_cache = ctk.CTkButton(
+            v_opts_row,
+            text="🗑 Clear Cache",
+            width=90,
+            height=30,
+            font=("Segoe UI", 10, "bold"),
+            fg_color="#1E293B",
+            hover_color="#334155",
+            border_color="#475569",
+            border_width=1,
+            text_color="#94A3B8",
+            command=self.clear_verifier_cache
+        )
+        self.btn_verifier_clear_cache.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_verifier_clear_cache)
 
         self.btn_verifier_stop_scan = ctk.CTkButton(
             v_opts_row,
@@ -1707,7 +1735,7 @@ class DownloaderApp(ctk.CTk):
             text_color="#FB7185",
             command=self.stop_fact_check_scan
         )
-        self.btn_verifier_stop_scan.pack(side="right")
+        self.btn_verifier_stop_scan.pack(side="right", padx=(0, 6))
 
         self.btn_verifier_start_scan = ctk.CTkButton(
             v_opts_row,
@@ -1725,17 +1753,21 @@ class DownloaderApp(ctk.CTk):
         v_stats_inner = ctk.CTkFrame(self.verifier_stats_card, fg_color="transparent")
         v_stats_inner.pack(fill="x", padx=15, pady=6)
 
-        self.verifier_lbl_total = ctk.CTkLabel(v_stats_inner, text="0 Scanned", font=("Segoe UI", 10, "bold"), text_color="#78909C")
+        self.verifier_lbl_total = ctk.CTkLabel(v_stats_inner, text="0 Scanned", font=("Segoe UI", 10, "bold"), text_color="#78909C", cursor="hand2")
         self.verifier_lbl_total.pack(side="left", padx=(0, 10))
+        self.verifier_lbl_total.bind("<Button-1>", lambda e: self.set_verifier_filter("all"))
 
-        self.verifier_lbl_mismatch = ctk.CTkLabel(v_stats_inner, text="0 ⚠️ Mismatches", font=("Segoe UI", 10, "bold"), text_color="#FB7185")
+        self.verifier_lbl_mismatch = ctk.CTkLabel(v_stats_inner, text="0 ⚠️ Mismatches", font=("Segoe UI", 10, "bold"), text_color="#FB7185", cursor="hand2")
         self.verifier_lbl_mismatch.pack(side="left", padx=(0, 10))
+        self.verifier_lbl_mismatch.bind("<Button-1>", lambda e: self.set_verifier_filter("mismatch"))
 
-        self.verifier_lbl_verified = ctk.CTkLabel(v_stats_inner, text="0 ✅ Verified", font=("Segoe UI", 10, "bold"), text_color="#4ADE80")
+        self.verifier_lbl_verified = ctk.CTkLabel(v_stats_inner, text="0 ✅ Verified", font=("Segoe UI", 10, "bold"), text_color="#4ADE80", cursor="hand2")
         self.verifier_lbl_verified.pack(side="left", padx=(0, 10))
+        self.verifier_lbl_verified.bind("<Button-1>", lambda e: self.set_verifier_filter("verified"))
 
-        self.verifier_lbl_unrec = ctk.CTkLabel(v_stats_inner, text="0 ❓ Unknown", font=("Segoe UI", 10, "bold"), text_color="#94A3B8")
+        self.verifier_lbl_unrec = ctk.CTkLabel(v_stats_inner, text="0 ❓ Unknown", font=("Segoe UI", 10, "bold"), text_color="#94A3B8", cursor="hand2")
         self.verifier_lbl_unrec.pack(side="left", padx=(0, 15))
+        self.verifier_lbl_unrec.bind("<Button-1>", lambda e: self.set_verifier_filter("unrec"))
 
         self.btn_verifier_deselect_all = ctk.CTkButton(
             v_stats_inner,
@@ -1784,7 +1816,7 @@ class DownloaderApp(ctk.CTk):
         self.btn_vfilt_mismatch = ctk.CTkButton(
             v_stats_inner,
             text="⚠️ Mismatches",
-            width=85,
+            width=88,
             height=24,
             font=("Segoe UI", 9, "bold"),
             command=lambda: self.set_verifier_filter("mismatch")
@@ -1835,7 +1867,17 @@ class DownloaderApp(ctk.CTk):
 
         self.verifier_progress_bar = ctk.CTkProgressBar(self.verifier_action_card, height=8, corner_radius=4, progress_color="#00E5FF", fg_color="#070F15")
         self.verifier_progress_bar.set(0)
-        self.verifier_progress_bar.pack(fill="x", padx=15, pady=(2, 8))
+        self.verifier_progress_bar.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.verifier_workers_lbl = ctk.CTkLabel(
+            self.verifier_action_card,
+            text="",
+            font=("Segoe UI", 9),
+            text_color="#38BDF8",
+            anchor="w"
+        )
+        self.verifier_workers_lbl.pack(fill="x", padx=15, pady=(0, 6))
+        self.theme_labels_secondary.append(self.verifier_workers_lbl)
 
         v_act_btns = ctk.CTkFrame(self.verifier_action_card, fg_color="transparent")
         v_act_btns.pack(fill="x", padx=15, pady=(0, 8))
@@ -4527,6 +4569,7 @@ class DownloaderApp(ctk.CTk):
         self.verifier_cancel_event.clear()
         self.verifier_scan_results = []
         self.verifier_track_items = []
+        self.verifier_active_workers = {}
 
         # Clear scrollable list
         for child in self.verifier_scroll.winfo_children():
@@ -4537,6 +4580,7 @@ class DownloaderApp(ctk.CTk):
         self.btn_verifier_fix_selected.configure(state="disabled")
         self.btn_verifier_export.configure(state="disabled")
         self.verifier_status_lbl.configure(text="Discovering audio files...", text_color="#78909C")
+        self.verifier_workers_lbl.configure(text="⚡ Active: Initializing worker threads...", text_color="#38BDF8")
         self.power_light.configure(text="● SCANNING", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
 
         self.verifier_lbl_total.configure(text="0 Scanned")
@@ -4544,8 +4588,38 @@ class DownloaderApp(ctk.CTk):
         self.verifier_lbl_verified.configure(text="0 ✅ Verified")
         self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
 
-        def log_cb(msg: str):
-            self.log(f"[Fact-Checker] {msg}")
+        def log_cb(msg: str, is_error: bool = False):
+            self.log(f"[Fact-Checker] {msg}", is_error=is_error)
+
+        def active_worker_cb(workers: dict):
+            self.verifier_active_workers = workers
+            self.after(0, update_workers_display)
+
+        def update_workers_display():
+            if not self.verifier_is_scanning:
+                self.verifier_workers_lbl.configure(text="")
+                return
+            if not self.verifier_active_workers:
+                self.verifier_workers_lbl.configure(text="⚡ Active: Dispatching next tracks...", text_color="#78909C")
+                return
+
+            worker_strs = []
+            now = time.time()
+            for idx, info in enumerate(self.verifier_active_workers.values(), start=1):
+                fn = info.get("filename", "")
+                if len(fn) > 28:
+                    fn = fn[:25] + "..."
+                elapsed = int(now - info.get("start_time", now))
+                warn = " ⚠️" if elapsed >= 15 else ""
+                worker_strs.append(f"W{idx}: {fn} ({elapsed}s{warn})")
+
+            disp_text = "⚡ Active: " + "  |  ".join(worker_strs)
+            self.verifier_workers_lbl.configure(text=disp_text, text_color="#38BDF8")
+
+        def heartbeat_loop():
+            if self.verifier_is_scanning:
+                update_workers_display()
+                self.after(500, heartbeat_loop)
 
         def progress_cb(curr: int, total: int, filename: str):
             pct = curr / max(1, total)
@@ -4560,7 +4634,7 @@ class DownloaderApp(ctk.CTk):
             tot = len(self.verifier_scan_results)
             mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
             ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
-            unr = sum(1 for r in self.verifier_scan_results if r.get("status") == "UNRECOGNIZED")
+            unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
             self.after(0, lambda: self.verifier_lbl_total.configure(text=f"{tot} Scanned"))
             self.after(0, lambda: self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches"))
             self.after(0, lambda: self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified"))
@@ -4568,17 +4642,23 @@ class DownloaderApp(ctk.CTk):
 
         def run_scan():
             self.log(f"Starting acoustic library fact-check on: {folder}")
+            use_cache = bool(self.verifier_cache_switch.get()) if hasattr(self, 'verifier_cache_switch') else True
             try:
                 AudioFactChecker.scan_directory(
                     root_dir=folder,
                     progress_cb=progress_cb,
                     item_cb=item_cb,
-                    cancel_event=self.verifier_cancel_event
+                    active_worker_cb=active_worker_cb,
+                    log_cb=log_cb,
+                    cancel_event=self.verifier_cancel_event,
+                    per_file_timeout=20.0,
+                    use_cache=use_cache
                 )
             except Exception as e:
                 self.log(f"Scan error: {e}", is_error=True)
             self.after(0, self.on_verifier_scan_complete)
 
+        self.after(500, heartbeat_loop)
         threading.Thread(target=run_scan, daemon=True).start()
 
     def stop_fact_check_scan(self):
@@ -4586,10 +4666,13 @@ class DownloaderApp(ctk.CTk):
         if self.verifier_is_scanning:
             self.verifier_cancel_event.set()
             self.verifier_status_lbl.configure(text="Cancelling scan...", text_color="#FB7185")
+            self.verifier_workers_lbl.configure(text="⏹ Stopping worker threads...", text_color="#FB7185")
             self.log("Acoustic scan cancellation requested by user.")
 
     def on_verifier_scan_complete(self):
         self.verifier_is_scanning = False
+        self.verifier_active_workers = {}
+        self.verifier_workers_lbl.configure(text="")
         self.btn_verifier_start_scan.configure(state="normal", text="🔍  Scan & Fact-Check")
         self.btn_verifier_fix_selected.configure(state="normal")
         self.btn_verifier_export.configure(state="normal")
@@ -4602,18 +4685,49 @@ class DownloaderApp(ctk.CTk):
         tot = len(self.verifier_scan_results)
         mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
         ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
-        unr = sum(1 for r in self.verifier_scan_results if r.get("status") == "UNRECOGNIZED")
+        unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
+
+        # If mismatches are detected, automatically default the view to Mismatches so the user immediately sees tracks to fix
+        if mis > 0:
+            self.verifier_filter_mode = "mismatch"
+        self.update_verifier_filter_buttons()
 
         self.verifier_status_lbl.configure(
             text=f"✓ Scan Complete: {tot} files scanned | {mis} mismatches found | {ver} verified",
             text_color="#FB7185" if mis > 0 else "#4ADE80"
         )
-        self.log(f"Scan finished: {tot} total files, {mis} tag mismatches detected, {ver} verified, {unr} unrecognized.")
+        self.log(f"Scan finished: {tot} total files, {mis} tag mismatches detected, {ver} verified, {unr} unrecognized/timeouts.")
 
         self.render_verifier_results()
 
     def set_verifier_filter(self, mode: str):
         self.verifier_filter_mode = mode
+        self.update_verifier_filter_buttons()
+        self.render_verifier_results()
+
+    def update_verifier_filter_buttons(self):
+        cfg = getattr(self, 'theme_cfg', {})
+        active_bg = cfg.get("option_btn", "#028090")
+        inactive_bg = cfg.get("input_bg", "#070F15")
+        border = cfg.get("btn_border", "#1F3A4E")
+
+        mode = self.verifier_filter_mode
+        if hasattr(self, 'btn_vfilt_all'):
+            self.btn_vfilt_all.configure(fg_color=active_bg if mode == "all" else inactive_bg, border_color=cfg.get("accent", "#00E5FF") if mode == "all" else border)
+            self.btn_vfilt_mismatch.configure(fg_color="#881337" if mode == "mismatch" else inactive_bg, border_color="#FB7185" if mode == "mismatch" else border)
+            self.btn_vfilt_verified.configure(fg_color="#064E3B" if mode == "verified" else inactive_bg, border_color="#34D399" if mode == "verified" else border)
+            self.btn_vfilt_unrec.configure(fg_color="#334155" if mode == "unrec" else inactive_bg, border_color="#94A3B8" if mode == "unrec" else border)
+
+    def clear_verifier_cache(self):
+        """ Clears persistent verification cache on disk """
+        AudioFactChecker.clear_cache()
+        self.verifier_scan_results = []
+        self.verifier_lbl_total.configure(text="0 Scanned")
+        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Mismatches")
+        self.verifier_lbl_verified.configure(text="0 ✅ Verified")
+        self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
+        self.verifier_status_lbl.configure(text="✓ Verification cache cleared. Ready for fresh scan.", text_color="#4ADE80")
+        self.log("[Fact-Checker] Persistent scan cache has been cleared.")
         self.render_verifier_results()
 
     def toggle_all_verifier_items(self, state: bool):
@@ -4631,6 +4745,14 @@ class DownloaderApp(ctk.CTk):
         border_col = cfg.get("border", "#1F3A4E")
         accent = cfg.get("accent", "#00E5FF")
 
+        status_priority = {
+            "MISMATCH": 0,
+            "TIMEOUT": 1,
+            "ERROR": 2,
+            "UNRECOGNIZED": 3,
+            "VERIFIED": 4
+        }
+
         filtered = []
         for idx, res in enumerate(self.verifier_scan_results):
             st = res.get("status", "")
@@ -4638,9 +4760,12 @@ class DownloaderApp(ctk.CTk):
                 continue
             if self.verifier_filter_mode == "verified" and st != "VERIFIED":
                 continue
-            if self.verifier_filter_mode == "unrec" and st != "UNRECOGNIZED":
+            if self.verifier_filter_mode == "unrec" and st not in ("UNRECOGNIZED", "TIMEOUT", "ERROR"):
                 continue
             filtered.append((idx, res))
+
+        # Always sort with Mismatches first, then Unknown/Errors, then Verified
+        filtered.sort(key=lambda x: (status_priority.get(x[1].get("status", ""), 99), x[1].get("filename", "").lower()))
 
         if not filtered:
             msg = "No files match the selected filter." if self.verifier_scan_results else "No scan performed yet. Select your music folder and click 'Scan & Fact-Check'."
@@ -4684,6 +4809,9 @@ class DownloaderApp(ctk.CTk):
             elif st == "VERIFIED":
                 badge_text = "✅ VERIFIED"
                 badge_color = "#4ADE80"
+            elif st == "TIMEOUT":
+                badge_text = "⏳ TIMEOUT"
+                badge_color = "#F59E0B"
             elif st == "UNRECOGNIZED":
                 badge_text = "❓ UNKNOWN"
                 badge_color = "#94A3B8"

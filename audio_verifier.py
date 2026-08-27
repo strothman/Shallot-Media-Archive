@@ -183,17 +183,17 @@ class AudioFactChecker:
         return metadata
 
     @classmethod
-    async def recognize_audio_async(cls, file_path: str) -> Dict:
-        """Runs acoustic waveform recognition via Shazam."""
+    async def recognize_audio_async(cls, file_path: str, timeout: float = 20.0) -> Dict:
+        """Runs acoustic waveform recognition via Shazam with timeout protection."""
         if not HAS_SHAZAM:
-            return {"error": "shazamio package is not installed"}
+            return {"matched": False, "error": "shazamio package is not installed"}
 
         if not os.path.exists(file_path):
-            return {"error": f"File not found: {file_path}"}
+            return {"matched": False, "error": f"File not found: {file_path}"}
 
         try:
             shazam = Shazam()
-            out = await shazam.recognize(file_path)
+            out = await asyncio.wait_for(shazam.recognize(file_path), timeout=timeout)
             track = out.get("track", {})
             if not track or not track.get("title"):
                 return {
@@ -245,6 +245,11 @@ class AudioFactChecker:
                 "shazam_id": track.get("key", ""),
                 "raw": track
             }
+        except asyncio.TimeoutError:
+            return {
+                "matched": False,
+                "error": f"Recognition timed out after {int(timeout)}s (network or server delay)"
+            }
         except Exception as e:
             return {
                 "matched": False,
@@ -252,13 +257,19 @@ class AudioFactChecker:
             }
 
     @classmethod
-    def verify_single_file(cls, file_path: str) -> Dict:
+    def verify_single_file(
+        cls,
+        file_path: str,
+        timeout: float = 20.0,
+        log_cb: Optional[Callable[[str, bool], None]] = None
+    ) -> Dict:
         """Synchronously verifies a single file, comparing embedded tags vs audio match."""
+        filename = os.path.basename(file_path)
         embedded = cls.extract_embedded_metadata(file_path)
         
-        # Run recognition
+        # Run recognition with strict timeout
         try:
-            rec_result = asyncio.run(cls.recognize_audio_async(file_path))
+            rec_result = asyncio.run(cls.recognize_audio_async(file_path, timeout=timeout))
         except Exception as e:
             rec_result = {"matched": False, "error": str(e)}
 
@@ -268,8 +279,15 @@ class AudioFactChecker:
         title_sim = 0.0
 
         if rec_result.get("error"):
-            status = "ERROR"
-            discrepancy_reason = rec_result.get("error", "Unknown error")
+            err_msg = rec_result.get("error", "Unknown error")
+            if "timed out" in err_msg.lower():
+                status = "TIMEOUT"
+                discrepancy_reason = f"Recognition timed out after {int(timeout)}s (skipped hanging file)"
+            else:
+                status = "ERROR"
+                discrepancy_reason = err_msg
+            if log_cb:
+                log_cb(f"[{status}] {filename}: {discrepancy_reason}", True)
         elif rec_result.get("matched"):
             v_artist = rec_result.get("artist", "")
             v_title = rec_result.get("title", "")
@@ -283,6 +301,8 @@ class AudioFactChecker:
             if artist_sim >= 0.70 and title_sim >= 0.65:
                 status = "VERIFIED"
                 discrepancy_reason = "Audio matches current tags"
+                if log_cb:
+                    log_cb(f"[VERIFIED] {filename} -> '{v_artist} - {v_title}'", False)
             else:
                 status = "MISMATCH"
                 reasons = []
@@ -291,13 +311,17 @@ class AudioFactChecker:
                 if title_sim < 0.65:
                     reasons.append(f"Title mismatch: Tag '{e_title}' vs Audio '{v_title}'")
                 discrepancy_reason = "; ".join(reasons)
+                if log_cb:
+                    log_cb(f"[MISMATCH] {filename} | Tag: '{e_artist} - {e_title}' | Audio: '{v_artist} - {v_title}'", True)
         else:
             status = "UNRECOGNIZED"
             discrepancy_reason = "No acoustic fingerprint match found in database"
+            if log_cb:
+                log_cb(f"[UNKNOWN] {filename}: No acoustic fingerprint match", False)
 
         return {
             "file_path": file_path,
-            "filename": os.path.basename(file_path),
+            "filename": filename,
             "status": status,
             "discrepancy_reason": discrepancy_reason,
             "artist_similarity": round(artist_sim, 2),
@@ -307,17 +331,59 @@ class AudioFactChecker:
         }
 
     @classmethod
+    def get_cache_path(cls) -> str:
+        exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(exe_dir, "verifier_cache.json")
+
+    @classmethod
+    def load_cache(cls, cache_path: Optional[str] = None) -> Dict:
+        path = cache_path or cls.get_cache_path()
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    @classmethod
+    def save_cache(cls, cache: Dict, cache_path: Optional[str] = None):
+        path = cache_path or cls.get_cache_path()
+        try:
+            temp_path = path + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2)
+            if os.path.exists(path):
+                os.remove(path)
+            os.rename(temp_path, path)
+        except Exception as e:
+            print(f"Error saving verifier cache: {e}")
+
+    @classmethod
+    def clear_cache(cls, cache_path: Optional[str] = None):
+        path = cache_path or cls.get_cache_path()
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+    @classmethod
     def scan_directory(
         cls,
         root_dir: str,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
         item_cb: Optional[Callable[[Dict], None]] = None,
+        active_worker_cb: Optional[Callable[[Dict[int, Dict]], None]] = None,
+        log_cb: Optional[Callable[[str, bool], None]] = None,
         cancel_event: Optional[threading.Event] = None,
-        max_workers: int = 3
+        max_workers: int = 3,
+        per_file_timeout: float = 20.0,
+        use_cache: bool = True
     ) -> List[Dict]:
         """
-        Recursively scans directory, verifies all audio files concurrently,
-        and yields progress callbacks.
+        Recursively scans directory, verifies all audio files concurrently with timeouts,
+        automatically resumes from disk cache, and yields progress callbacks.
         """
         if not os.path.exists(root_dir):
             raise ValueError(f"Directory not found: {root_dir}")
@@ -335,37 +401,120 @@ class AudioFactChecker:
         results = []
         completed_count = 0
         lock = threading.Lock()
+        active_workers: Dict[int, Dict] = {}
+
+        # 1. Check persistent cache for fast resume
+        cache = cls.load_cache() if use_cache else {}
+        unscanned_files = []
+        cached_count = 0
+
+        for fp in audio_files:
+            if cancel_event and cancel_event.is_set():
+                break
+            is_cached = False
+            if use_cache and fp in cache:
+                try:
+                    st = os.stat(fp)
+                    entry = cache[fp]
+                    if entry.get("mtime") == st.st_mtime and entry.get("size") == st.st_size:
+                        c_res = entry.get("result", {})
+                        if c_res.get("status") in ("VERIFIED", "MISMATCH", "UNRECOGNIZED"):
+                            results.append(c_res)
+                            completed_count += 1
+                            cached_count += 1
+                            if item_cb:
+                                item_cb(c_res)
+                            is_cached = True
+                except Exception:
+                    pass
+            if not is_cached:
+                unscanned_files.append(fp)
+
+        if cached_count > 0:
+            if log_cb:
+                log_cb(f"⚡ Fast Resume: Loaded {cached_count}/{total_files} previously scanned tracks from cache.", False)
+            if progress_cb:
+                progress_cb(completed_count, total_files, f"Loaded {cached_count} from cache")
+
+        if not unscanned_files or (cancel_event and cancel_event.is_set()):
+            return results
+
+        if log_cb:
+            log_cb(f"Scanning remaining {len(unscanned_files)} files in {root_dir} (Timeout per track: {int(per_file_timeout)}s)", False)
 
         def process_file(file_path: str):
             nonlocal completed_count
             if cancel_event and cancel_event.is_set():
                 return None
 
-            res = cls.verify_single_file(file_path)
+            tid = threading.get_ident()
+            filename = os.path.basename(file_path)
             with lock:
+                active_workers[tid] = {
+                    "filename": filename,
+                    "start_time": time.time(),
+                    "status": "Recognizing Audio"
+                }
+                snapshot = {k: v.copy() for k, v in active_workers.items()}
+            
+            if active_worker_cb:
+                active_worker_cb(snapshot)
+
+            res = cls.verify_single_file(file_path, timeout=per_file_timeout, log_cb=log_cb)
+
+            with lock:
+                active_workers.pop(tid, None)
                 completed_count += 1
                 curr_c = completed_count
                 results.append(res)
+                snapshot = {k: v.copy() for k, v in active_workers.items()}
+
+                # Store in persistent cache
+                if use_cache and res.get("status") in ("VERIFIED", "MISMATCH", "UNRECOGNIZED"):
+                    try:
+                        st = os.stat(file_path)
+                        cache[file_path] = {
+                            "mtime": st.st_mtime,
+                            "size": st.st_size,
+                            "result": res
+                        }
+                    except Exception:
+                        pass
 
             if progress_cb:
-                progress_cb(curr_c, total_files, os.path.basename(file_path))
+                progress_cb(curr_c, total_files, filename)
 
             if item_cb:
                 item_cb(res)
+
+            if active_worker_cb:
+                active_worker_cb(snapshot)
+
+            # Periodically flush cache to disk every 5 completed tracks
+            if use_cache and curr_c % 5 == 0:
+                with lock:
+                    cls.save_cache(cache)
 
             return res
 
         workers = max(1, min(max_workers, 5))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(process_file, fp) for fp in audio_files]
+            futures = [executor.submit(process_file, fp) for fp in unscanned_files]
+
             for f in futures:
                 if cancel_event and cancel_event.is_set():
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
                 try:
                     f.result()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if log_cb:
+                        log_cb(f"Task error on file: {e}", True)
+
+        # Final cache flush
+        if use_cache:
+            with lock:
+                cls.save_cache(cache)
 
         return results
 

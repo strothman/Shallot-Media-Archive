@@ -1,5 +1,6 @@
 import atexit
 from concurrent.futures import ThreadPoolExecutor
+import ctypes
 import json
 import os
 import re
@@ -8,8 +9,16 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import urllib.request
+
+# Ensure Windows Taskbar displays the dedicated app icon instead of generic python icon
+if sys.platform.startswith("win"):
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ShallotMediaArchive.SMArchive.GUI.1.0")
+    except Exception:
+        pass
 
 import customtkinter as ctk
 from PIL import Image
@@ -72,10 +81,15 @@ class DownloaderApp(ctk.CTk):
         self.verifier_filter_mode = "all"
         self.verifier_active_workers = {}
 
-        # --- Custom Window Icon ---
-        icon_path = self.get_file_path("icon.ico")
+        # --- Custom Window & Taskbar Icon ---
+        icon_path = self.get_file_path("shallot.ico")
+        if not os.path.exists(icon_path):
+            icon_path = self.get_file_path("icon.ico")
         if os.path.exists(icon_path):
-            self.iconbitmap(icon_path)
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
 
         # --- System Tray & Close Behavior ---
         self.tray_icon = None
@@ -1700,9 +1714,13 @@ class DownloaderApp(ctk.CTk):
             text="Fast Resume (Cache)",
             font=("Segoe UI", 9),
             width=140,
-            height=18
+            height=18,
+            command=lambda: self.save_setting("verifier_use_cache", bool(self.verifier_cache_switch.get()))
         )
-        self.verifier_cache_switch.select()
+        if self.saved_settings.get("verifier_use_cache", True):
+            self.verifier_cache_switch.select()
+        else:
+            self.verifier_cache_switch.deselect()
         self.verifier_cache_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_cache_switch)
 
@@ -3361,8 +3379,9 @@ class DownloaderApp(ctk.CTk):
 
                 # Pre-check if already exists in library
                 try:
+                    coll = self.spotify_collection or {}
                     is_in_lib = SpotifyPlexampPipeline.check_existing_track(
-                        dest_folder, track, self.spotify_collection, audio_fmt, folder_struct
+                        dest_folder, track, coll, audio_fmt, folder_struct
                     )
                 except Exception:
                     is_in_lib = False
@@ -3498,9 +3517,12 @@ class DownloaderApp(ctk.CTk):
         )
 
         def run_pipeline():
+            if not self.spotify_pipeline:
+                return
             self.log(f"Starting Spotify to Plexamp sync ({len(selected_tracks)} songs) to: {dest_folder} (Concurrency: {concurrency})")
+            coll = self.spotify_collection or {}
             stats = self.spotify_pipeline.process_playlist(
-                collection=self.spotify_collection,
+                collection=coll,
                 selected_tracks=selected_tracks,
                 base_music_dir=dest_folder,
                 audio_format=audio_fmt,
@@ -3705,8 +3727,9 @@ class DownloaderApp(ctk.CTk):
 
                 # Pre-check if already exists in library
                 try:
+                    coll = self.yt_plexamp_collection or {}
                     is_in_lib = YouTubePlexampPipeline.check_existing_track(
-                        dest_folder, track, self.yt_plexamp_collection, audio_fmt, folder_struct
+                        dest_folder, track, coll, audio_fmt, folder_struct
                     )
                 except Exception:
                     is_in_lib = False
@@ -3843,9 +3866,12 @@ class DownloaderApp(ctk.CTk):
         )
 
         def run_pipeline():
+            if not self.yt_plexamp_pipeline:
+                return
             self.log(f"Starting YouTube to Plexamp sync ({len(selected_tracks)} songs) to: {dest_folder} (Concurrency: {concurrency})")
+            coll = self.yt_plexamp_collection or {}
             stats = self.yt_plexamp_pipeline.process_playlist(
-                collection=self.yt_plexamp_collection,
+                collection=coll,
                 selected_tracks=selected_tracks,
                 base_music_dir=dest_folder,
                 audio_format=audio_fmt,
@@ -4035,8 +4061,9 @@ class DownloaderApp(ctk.CTk):
 
                 # Pre-check if already in library
                 try:
+                    coll = self.local_plexamp_collection or {}
                     is_in_lib = LocalPlexampPipeline.check_existing_track(
-                        dest_folder, track, self.local_plexamp_collection, target_ext, folder_struct
+                        dest_folder, track, coll, target_ext, folder_struct
                     )
                 except Exception:
                     is_in_lib = False
@@ -4171,9 +4198,12 @@ class DownloaderApp(ctk.CTk):
         )
 
         def run_pipeline():
+            if not self.local_plexamp_pipeline:
+                return
             self.log(f"Starting Local to Plexamp import ({len(selected_tracks)} files) to: {dest_folder} (Concurrency: {concurrency})")
+            coll = self.local_plexamp_collection or {}
             stats = self.local_plexamp_pipeline.process_batch(
-                collection=self.local_plexamp_collection,
+                collection=coll,
                 selected_tracks=selected_tracks,
                 base_music_dir=dest_folder,
                 output_format_option=raw_fmt,
@@ -4518,7 +4548,9 @@ class DownloaderApp(ctk.CTk):
     def init_system_tray(self):
         """Initializes the background system tray icon for minimize-to-tray functionality."""
         try:
-            icon_path = self.get_file_path("icon.ico")
+            icon_path = self.get_file_path("shallot.ico")
+            if not os.path.exists(icon_path):
+                icon_path = self.get_file_path("icon.ico")
             if os.path.exists(icon_path):
                 img = Image.open(icon_path)
             else:
@@ -4743,7 +4775,6 @@ class DownloaderApp(ctk.CTk):
         cfg = getattr(self, 'theme_cfg', {})
         card_bg = cfg.get("input_bg", "#070F15")
         border_col = cfg.get("border", "#1F3A4E")
-        accent = cfg.get("accent", "#00E5FF")
 
         status_priority = {
             "MISMATCH": 0,

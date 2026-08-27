@@ -1333,7 +1333,8 @@ class SpotifyPlexampPipeline:
                         self.track_status_cb(track_index, "✓ Done", "#4ADE80")
 
                 # Polite pacing: prevents CPU bursts, GPU stalls, and YouTube anti-bot rate-limiting
-                import time, random
+                import time
+                import random
                 time.sleep(random.uniform(0.6, 1.2))
                 if seq_idx % 15 == 0:
                     import gc

@@ -9,20 +9,16 @@ and folder re-organization for Plexamp.
 import argparse
 import asyncio
 import csv
-import io
 import json
 import os
 import re
 import shutil
-import ssl
 import sys
 import tempfile
 import threading
 import time
-import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
@@ -40,26 +36,20 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 if base_dir not in [os.path.abspath(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]:
     os.environ["PATH"] = base_dir + os.pathsep + os.environ.get("PATH", "")
 
-import mutagen
-from mutagen.id3 import ID3, APIC, ID3NoHeaderError, TALB, TCMP, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK, TXXX, USLT
-from mutagen.flac import FLAC, Picture
-from mutagen.mp4 import MP4, MP4Cover
-from PIL import Image
-
-try:
-    from shazamio import Shazam
-    HAS_SHAZAM = True
-except ImportError:
-    HAS_SHAZAM = False
-
-from spotify_sync import (
+import mutagen  # noqa: E402
+from spotify_sync import (  # noqa: E402
     LyricsFetcher,
     PlexampTagger,
     ReplayGainCalculator,
     safe_move_file,
-    safe_save_tags,
     sanitize_filename
 )
+
+try:
+    from shazamio import Shazam  # noqa: E402
+    HAS_SHAZAM = True
+except ImportError:
+    HAS_SHAZAM = False
 
 SUPPORTED_AUDIO_EXTENSIONS = {
     ".mp3", ".flac", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".alac"
@@ -183,78 +173,87 @@ class AudioFactChecker:
         return metadata
 
     @classmethod
-    async def recognize_audio_async(cls, file_path: str, timeout: float = 20.0) -> Dict:
-        """Runs acoustic waveform recognition via Shazam with timeout protection."""
+    async def recognize_audio_async(cls, file_path: str, timeout: float = 25.0) -> Dict:
+        """Runs acoustic waveform recognition via Shazam with timeout protection and retry."""
         if not HAS_SHAZAM:
             return {"matched": False, "error": "shazamio package is not installed"}
 
         if not os.path.exists(file_path):
             return {"matched": False, "error": f"File not found: {file_path}"}
 
-        try:
-            shazam = Shazam()
-            out = await asyncio.wait_for(shazam.recognize(file_path), timeout=timeout)
-            track = out.get("track", {})
-            if not track or not track.get("title"):
+        shazam = Shazam()
+        for attempt in range(2):
+            try:
+                out = await asyncio.wait_for(shazam.recognize(file_path), timeout=timeout)
+                track = out.get("track", {})
+                if not track or not track.get("title"):
+                    return {
+                        "matched": False,
+                        "title": "",
+                        "artist": "",
+                        "album": "",
+                        "year": "",
+                        "genre": "",
+                        "cover_url": "",
+                        "raw": out
+                    }
+
+                title = track.get("title", "")
+                artist = track.get("subtitle", "")
+                album = ""
+                year = ""
+                label = ""
+                cover_url = track.get("images", {}).get("coverarthq") or track.get("images", {}).get("coverart") or ""
+
+                genres = track.get("genres", {})
+                genre = genres.get("primary", "") if isinstance(genres, dict) else ""
+
+                sections = track.get("sections", [])
+                for sec in sections:
+                    if sec.get("type") == "SONG":
+                        for meta in sec.get("metadata", []):
+                            m_title = (meta.get("title") or "").strip().lower()
+                            m_text = (meta.get("text") or "").strip()
+                            if m_title == "album":
+                                album = m_text
+                            elif m_title == "released":
+                                year = m_text[:4] if len(m_text) >= 4 else m_text
+                            elif m_title == "label":
+                                label = m_text
+
+                if not album:
+                    album = title
+
+                return {
+                    "matched": True,
+                    "title": title,
+                    "artist": artist,
+                    "album": album,
+                    "year": year,
+                    "genre": genre,
+                    "label": label,
+                    "cover_url": cover_url,
+                    "shazam_id": track.get("key", ""),
+                    "raw": track
+                }
+            except asyncio.TimeoutError:
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
+                    continue
                 return {
                     "matched": False,
-                    "title": "",
-                    "artist": "",
-                    "album": "",
-                    "year": "",
-                    "genre": "",
-                    "cover_url": "",
-                    "raw": out
+                    "error": f"Recognition timed out after {int(timeout)}s (network or server delay)"
+                }
+            except Exception as e:
+                if attempt == 0 and "429" in str(e):
+                    await asyncio.sleep(2.0)
+                    continue
+                return {
+                    "matched": False,
+                    "error": str(e)
                 }
 
-            title = track.get("title", "")
-            artist = track.get("subtitle", "")
-            album = ""
-            year = ""
-            label = ""
-            cover_url = track.get("images", {}).get("coverarthq") or track.get("images", {}).get("coverart") or ""
-
-            genres = track.get("genres", {})
-            genre = genres.get("primary", "") if isinstance(genres, dict) else ""
-
-            sections = track.get("sections", [])
-            for sec in sections:
-                if sec.get("type") == "SONG":
-                    for meta in sec.get("metadata", []):
-                        m_title = (meta.get("title") or "").strip().lower()
-                        m_text = (meta.get("text") or "").strip()
-                        if m_title == "album":
-                            album = m_text
-                        elif m_title == "released":
-                            year = m_text[:4] if len(m_text) >= 4 else m_text
-                        elif m_title == "label":
-                            label = m_text
-
-            if not album:
-                album = title
-
-            return {
-                "matched": True,
-                "title": title,
-                "artist": artist,
-                "album": album,
-                "year": year,
-                "genre": genre,
-                "label": label,
-                "cover_url": cover_url,
-                "shazam_id": track.get("key", ""),
-                "raw": track
-            }
-        except asyncio.TimeoutError:
-            return {
-                "matched": False,
-                "error": f"Recognition timed out after {int(timeout)}s (network or server delay)"
-            }
-        except Exception as e:
-            return {
-                "matched": False,
-                "error": str(e)
-            }
+        return {"matched": False, "error": f"Recognition timed out after {int(timeout)}s"}
 
     @classmethod
     def verify_single_file(
@@ -416,7 +415,9 @@ class AudioFactChecker:
                 try:
                     st = os.stat(fp)
                     entry = cache[fp]
-                    if entry.get("mtime") == st.st_mtime and entry.get("size") == st.st_size:
+                    # Allow 2-second tolerance for SMB network timestamp resolution differences
+                    mtime_diff = abs(entry.get("mtime", 0) - st.st_mtime)
+                    if mtime_diff <= 2.0 and entry.get("size") == st.st_size:
                         c_res = entry.get("result", {})
                         if c_res.get("status") in ("VERIFIED", "MISMATCH", "UNRECOGNIZED"):
                             results.append(c_res)
@@ -432,7 +433,7 @@ class AudioFactChecker:
 
         if cached_count > 0:
             if log_cb:
-                log_cb(f"⚡ Fast Resume: Loaded {cached_count}/{total_files} previously scanned tracks from cache.", False)
+                log_cb(f"⚡ Fast Resume: Loaded {cached_count}/{total_files} previously verified tracks from cache.", False)
             if progress_cb:
                 progress_cb(completed_count, total_files, f"Loaded {cached_count} from cache")
 
@@ -490,31 +491,30 @@ class AudioFactChecker:
             if active_worker_cb:
                 active_worker_cb(snapshot)
 
-            # Periodically flush cache to disk every 5 completed tracks
-            if use_cache and curr_c % 5 == 0:
+            # Periodically flush cache to disk every 2 completed tracks
+            if use_cache and curr_c % 2 == 0:
                 with lock:
                     cls.save_cache(cache)
 
             return res
 
         workers = max(1, min(max_workers, 5))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(process_file, fp) for fp in unscanned_files]
-
-            for f in futures:
-                if cancel_event and cancel_event.is_set():
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                try:
-                    f.result()
-                except Exception as e:
-                    if log_cb:
-                        log_cb(f"Task error on file: {e}", True)
-
-        # Final cache flush
-        if use_cache:
-            with lock:
-                cls.save_cache(cache)
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(process_file, fp) for fp in unscanned_files]
+                for f in futures:
+                    if cancel_event and cancel_event.is_set():
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    try:
+                        f.result()
+                    except Exception as e:
+                        if log_cb:
+                            log_cb(f"Task error on file: {e}", True)
+        finally:
+            if use_cache:
+                with lock:
+                    cls.save_cache(cache)
 
         return results
 

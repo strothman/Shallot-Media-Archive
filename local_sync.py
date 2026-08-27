@@ -8,16 +8,11 @@ and organizes into standard Plex music folders (Music / Artist / Album / 01 - Ti
 
 import os
 import re
-import ssl
-import json
 import shutil
-import urllib.request
-import urllib.parse
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Callable
-from PIL import Image
 import mutagen
 
 from spotify_sync import (
@@ -25,8 +20,7 @@ from spotify_sync import (
     ReplayGainCalculator,
     LyricsFetcher,
     sanitize_filename,
-    safe_move_file,
-    safe_save_tags
+    safe_move_file
 )
 from youtube_sync import YouTubeTitleCleaner, YouTubeMetadataEnricher
 

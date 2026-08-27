@@ -23,8 +23,7 @@ from spotify_sync import (
     ReplayGainCalculator,
     LyricsFetcher,
     sanitize_filename,
-    safe_move_file,
-    safe_save_tags
+    safe_move_file
 )
 
 BELOW_NORMAL_PRIORITY_CLASS = 0x00004000

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- refactor: remove obsolete backup files and temporary assets from project directory (cbc0b9f)
+
 ### Added
 - implement YouTube sync module with automatic title cleaning and metadata enrichment (9900a08)
 

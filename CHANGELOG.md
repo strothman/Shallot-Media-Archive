@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- implement persistent audio verification cache to optimize status lookups (5bd5a13)
+
+### Added
 - implement acoustic fingerprinting and metadata verification module for audio library integrity (a9babbb)
 
 ### Changed

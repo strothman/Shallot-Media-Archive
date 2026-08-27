@@ -17,6 +17,7 @@ import pystray
 from spotify_sync import SpotifyAuthHelper, SpotifyFetcher, SpotifyPlexampPipeline
 from youtube_sync import YouTubeFetcher, YouTubePlexampPipeline
 from local_sync import LocalAudioScanner, LocalPlexampPipeline
+from audio_verifier import AudioFactChecker
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
 base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -62,6 +63,13 @@ class DownloaderApp(ctk.CTk):
         self.local_plexamp_collection = None
         self.local_plexamp_track_items = []
         self.local_plexamp_pipeline = None
+
+        # --- Audio Fact-Checker State ---
+        self.verifier_scan_results = []
+        self.verifier_track_items = []
+        self.verifier_is_scanning = False
+        self.verifier_cancel_event = threading.Event()
+        self.verifier_filter_mode = "all"
 
         # --- Custom Window Icon ---
         icon_path = self.get_file_path("icon.ico")
@@ -170,6 +178,17 @@ class DownloaderApp(ctk.CTk):
             command=lambda: self.select_tab("local_plexamp")
         )
         self.btn_local_plexamp.pack(fill="x", padx=15, pady=4)
+
+        self.btn_verifier = ctk.CTkButton(
+            self.sidebar_frame,
+            text="🔬  Fact-Check Audio",
+            font=("Segoe UI", 12, "bold"),
+            height=38,
+            corner_radius=8,
+            anchor="w",
+            command=lambda: self.select_tab("verifier")
+        )
+        self.btn_verifier.pack(fill="x", padx=15, pady=4)
 
         self.btn_settings = ctk.CTkButton(
             self.sidebar_frame,
@@ -1601,6 +1620,265 @@ class DownloaderApp(ctk.CTk):
         self.btn_local_stop.pack(side="right")
 
         # =========================================================================
+        # --- Page: Audio Fact-Checker & Verifier Page ---
+        # =========================================================================
+        self.verifier_page = ctk.CTkFrame(self.main_container, fg_color="transparent")
+
+        lbl_pv = ctk.CTkLabel(self.verifier_page, text="Fact-Check Audio & Acoustic Verifier", font=("Segoe UI", 18, "bold"), anchor="w")
+        lbl_pv.pack(fill="x", padx=20, pady=(15, 10))
+        self.page_titles.append(lbl_pv)
+
+        # Card 1: Source & Controls Card
+        self.verifier_source_card = ctk.CTkFrame(self.verifier_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.verifier_source_card.pack(fill="x", padx=20, pady=4)
+
+        card_vsrc_lbl = ctk.CTkLabel(self.verifier_source_card, text="LIBRARY SOURCE & OPTIONS", font=("Segoe UI", 11, "bold"), text_color="#00E5FF")
+        card_vsrc_lbl.pack(anchor="w", padx=15, pady=(8, 3))
+        self.theme_titles.append(card_vsrc_lbl)
+
+        lbl_vsrc = ctk.CTkLabel(self.verifier_source_card, text="MUSIC FOLDER TO SCAN", font=("Segoe UI", 10, "bold"), text_color="#78909C")
+        lbl_vsrc.pack(anchor="w", padx=15, pady=(2, 0))
+        self.theme_labels_secondary.append(lbl_vsrc)
+
+        v_input_frame = ctk.CTkFrame(self.verifier_source_card, fg_color="transparent")
+        v_input_frame.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.verifier_folder_input = ctk.CTkEntry(
+            v_input_frame,
+            placeholder_text="e.g. \\\\joandesk\\Music\\Strothman or local music directory...",
+            height=32,
+            fg_color="#070F15",
+            border_color="#1F3A4E",
+            text_color="#F5F5F7"
+        )
+        saved_vdir = self.saved_settings.get("plex_music_folder", "") or self.saved_settings.get("destination_folder", "")
+        if saved_vdir:
+            self.verifier_folder_input.insert(0, saved_vdir)
+        self.verifier_folder_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.theme_entries.append(self.verifier_folder_input)
+
+        self.btn_verifier_browse = ctk.CTkButton(
+            v_input_frame,
+            text="📂 Browse",
+            width=75,
+            height=32,
+            font=("Segoe UI", 10, "bold"),
+            command=self.browse_verifier_folder
+        )
+        self.btn_verifier_browse.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_verifier_browse)
+
+        # Options & Scan Action Row
+        v_opts_row = ctk.CTkFrame(self.verifier_source_card, fg_color="transparent")
+        v_opts_row.pack(fill="x", padx=15, pady=(2, 8))
+
+        self.verifier_reorg_switch = ctk.CTkSwitch(
+            v_opts_row,
+            text="Auto-Move to Artist/Album",
+            font=("Segoe UI", 9),
+            width=165,
+            height=18
+        )
+        self.verifier_reorg_switch.select()
+        self.verifier_reorg_switch.pack(side="left", padx=(0, 10))
+        self.theme_switches.append(self.verifier_reorg_switch)
+
+        self.verifier_art_switch = ctk.CTkSwitch(
+            v_opts_row,
+            text="Download Art & Lyrics",
+            font=("Segoe UI", 9),
+            width=145,
+            height=18
+        )
+        self.verifier_art_switch.select()
+        self.verifier_art_switch.pack(side="left", padx=(0, 15))
+        self.theme_switches.append(self.verifier_art_switch)
+
+        self.btn_verifier_stop_scan = ctk.CTkButton(
+            v_opts_row,
+            text="⏹ Cancel",
+            width=80,
+            height=30,
+            font=("Segoe UI", 10, "bold"),
+            fg_color="#3B1214",
+            hover_color="#5C1D20",
+            border_color="#FB7185",
+            border_width=1,
+            text_color="#FB7185",
+            command=self.stop_fact_check_scan
+        )
+        self.btn_verifier_stop_scan.pack(side="right")
+
+        self.btn_verifier_start_scan = ctk.CTkButton(
+            v_opts_row,
+            text="🔍  Scan & Fact-Check",
+            height=30,
+            font=("Segoe UI", 11, "bold"),
+            command=self.start_fact_check_scan
+        )
+        self.btn_verifier_start_scan.pack(side="right", padx=(0, 6))
+
+        # Card 2: Filter & Stats Bar
+        self.verifier_stats_card = ctk.CTkFrame(self.verifier_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.verifier_stats_card.pack(fill="x", padx=20, pady=4)
+
+        v_stats_inner = ctk.CTkFrame(self.verifier_stats_card, fg_color="transparent")
+        v_stats_inner.pack(fill="x", padx=15, pady=6)
+
+        self.verifier_lbl_total = ctk.CTkLabel(v_stats_inner, text="0 Scanned", font=("Segoe UI", 10, "bold"), text_color="#78909C")
+        self.verifier_lbl_total.pack(side="left", padx=(0, 10))
+
+        self.verifier_lbl_mismatch = ctk.CTkLabel(v_stats_inner, text="0 ⚠️ Mismatches", font=("Segoe UI", 10, "bold"), text_color="#FB7185")
+        self.verifier_lbl_mismatch.pack(side="left", padx=(0, 10))
+
+        self.verifier_lbl_verified = ctk.CTkLabel(v_stats_inner, text="0 ✅ Verified", font=("Segoe UI", 10, "bold"), text_color="#4ADE80")
+        self.verifier_lbl_verified.pack(side="left", padx=(0, 10))
+
+        self.verifier_lbl_unrec = ctk.CTkLabel(v_stats_inner, text="0 ❓ Unknown", font=("Segoe UI", 10, "bold"), text_color="#94A3B8")
+        self.verifier_lbl_unrec.pack(side="left", padx=(0, 15))
+
+        self.btn_verifier_deselect_all = ctk.CTkButton(
+            v_stats_inner,
+            text="Deselect All",
+            width=75,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.toggle_all_verifier_items(False)
+        )
+        self.btn_verifier_deselect_all.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_verifier_deselect_all)
+
+        self.btn_verifier_select_all = ctk.CTkButton(
+            v_stats_inner,
+            text="Select All",
+            width=65,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.toggle_all_verifier_items(True)
+        )
+        self.btn_verifier_select_all.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_verifier_select_all)
+
+        self.btn_vfilt_unrec = ctk.CTkButton(
+            v_stats_inner,
+            text="❓ Unknown",
+            width=75,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("unrec")
+        )
+        self.btn_vfilt_unrec.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_vfilt_unrec)
+
+        self.btn_vfilt_verified = ctk.CTkButton(
+            v_stats_inner,
+            text="✅ Verified",
+            width=70,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("verified")
+        )
+        self.btn_vfilt_verified.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_vfilt_verified)
+
+        self.btn_vfilt_mismatch = ctk.CTkButton(
+            v_stats_inner,
+            text="⚠️ Mismatches",
+            width=85,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("mismatch")
+        )
+        self.btn_vfilt_mismatch.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_vfilt_mismatch)
+
+        self.btn_vfilt_all = ctk.CTkButton(
+            v_stats_inner,
+            text="All",
+            width=45,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("all")
+        )
+        self.btn_vfilt_all.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_vfilt_all)
+
+        # Card 3: Scrollable Result List
+        self.verifier_results_card = ctk.CTkFrame(self.verifier_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.verifier_results_card.pack(fill="both", expand=True, padx=20, pady=4)
+
+        self.verifier_scroll = ctk.CTkScrollableFrame(self.verifier_results_card, fg_color="transparent", border_width=0)
+        self.verifier_scroll.pack(fill="both", expand=True, padx=12, pady=6)
+
+        self.verifier_empty_lbl = ctk.CTkLabel(
+            self.verifier_scroll,
+            text="No scan performed yet. Select your Plexamp music folder above and click 'Scan & Fact-Check'.",
+            font=("Segoe UI", 11),
+            text_color="#78909C"
+        )
+        self.verifier_empty_lbl.pack(pady=30)
+        self.theme_labels_secondary.append(self.verifier_empty_lbl)
+
+        # Card 4: Action & Progress Card
+        self.verifier_action_card = ctk.CTkFrame(self.verifier_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.verifier_action_card.pack(fill="x", padx=20, pady=(4, 10))
+
+        v_act_top = ctk.CTkFrame(self.verifier_action_card, fg_color="transparent")
+        v_act_top.pack(fill="x", padx=15, pady=(8, 2))
+
+        self.verifier_status_lbl = ctk.CTkLabel(v_act_top, text="Ready to fact-check audio library", font=("Segoe UI", 10, "bold"), text_color="#78909C", anchor="w")
+        self.verifier_status_lbl.pack(side="left")
+        self.theme_labels_secondary.append(self.verifier_status_lbl)
+
+        self.verifier_counter_lbl = ctk.CTkLabel(v_act_top, text="0 / 0", font=("Segoe UI", 10, "bold"), text_color="#F5F5F7", anchor="e")
+        self.verifier_counter_lbl.pack(side="right")
+
+        self.verifier_progress_bar = ctk.CTkProgressBar(self.verifier_action_card, height=8, corner_radius=4, progress_color="#00E5FF", fg_color="#070F15")
+        self.verifier_progress_bar.set(0)
+        self.verifier_progress_bar.pack(fill="x", padx=15, pady=(2, 8))
+
+        v_act_btns = ctk.CTkFrame(self.verifier_action_card, fg_color="transparent")
+        v_act_btns.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.btn_verifier_fix_selected = ctk.CTkButton(
+            v_act_btns,
+            text="🛠  Fix & Re-tag Selected Mismatches",
+            font=("Segoe UI", 12, "bold"),
+            height=36,
+            corner_radius=8,
+            command=self.fix_selected_verifier_tracks
+        )
+        self.btn_verifier_fix_selected.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_verifier_export = ctk.CTkButton(
+            v_act_btns,
+            text="📋 Export Report",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            width=120,
+            corner_radius=8,
+            command=self.export_verifier_report
+        )
+        self.btn_verifier_export.pack(side="left", padx=(0, 6))
+        self.theme_buttons_secondary.append(self.btn_verifier_export)
+
+        self.btn_verifier_open_folder = ctk.CTkButton(
+            v_act_btns,
+            text="📂 Open Music Folder",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            width=140,
+            corner_radius=8,
+            fg_color="#0E1A24",
+            border_color="#00E5FF",
+            border_width=1,
+            text_color="#00E5FF",
+            command=self.open_verifier_music_folder
+        )
+        self.btn_verifier_open_folder.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_verifier_open_folder)
+
+        # =========================================================================
         # --- Page 4: Settings Page ---
         # =========================================================================
         self.settings_page = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -2260,6 +2538,7 @@ class DownloaderApp(ctk.CTk):
             "spotify": (self.btn_spotify, self.spotify_page),
             "yt_plexamp": (self.btn_yt_plexamp, self.yt_plexamp_page),
             "local_plexamp": (self.btn_local_plexamp, self.local_plexamp_page),
+            "verifier": (self.btn_verifier, self.verifier_page),
             "settings": (self.btn_settings, self.settings_page),
             "logs": (self.btn_logs, self.logs_page)
         }
@@ -4131,6 +4410,21 @@ class DownloaderApp(ctk.CTk):
                 hover_color=cfg["option_hover"],
                 checkmark_color=cfg["input_bg"]
             )
+
+        if hasattr(self, 'verifier_progress_bar'):
+            self.verifier_progress_bar.configure(
+                progress_color=cfg["accent"],
+                fg_color=cfg["input_bg"]
+            )
+        if hasattr(self, 'verifier_counter_lbl'):
+            self.verifier_counter_lbl.configure(text_color=cfg["text_primary"])
+        for item in getattr(self, 'verifier_track_items', []):
+            item["row_frame"].configure(fg_color=cfg["input_bg"], border_color=cfg["border"])
+            item["checkbox"].configure(
+                fg_color=cfg["option_btn"],
+                hover_color=cfg["option_hover"],
+                checkmark_color=cfg["input_bg"]
+            )
         
         self.status_box.configure(
             fg_color=cfg["input_bg"],
@@ -4198,6 +4492,380 @@ class DownloaderApp(ctk.CTk):
             threading.Thread(target=self.tray_icon.run, daemon=True).start()
         except Exception as e:
             print(f"[Tray] System tray init error: {e}")
+
+    # =========================================================================
+    # --- Audio Fact-Checker & Verifier Logic ---
+    # =========================================================================
+
+    def browse_verifier_folder(self):
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(title="Select Music Folder to Scan & Fact-Check")
+        if folder:
+            self.verifier_folder_input.delete(0, "end")
+            self.verifier_folder_input.insert(0, folder)
+            self.save_setting("plex_music_folder", folder)
+
+    def open_verifier_music_folder(self):
+        folder = self.verifier_folder_input.get().strip()
+        if folder and os.path.exists(folder):
+            try:
+                os.startfile(folder)
+            except Exception:
+                subprocess.Popen(["explorer", folder])
+        else:
+            self.log("Music folder does not exist or is not specified.", is_error=True)
+
+    def start_fact_check_scan(self):
+        """ Scans library and performs acoustic recognition to verify actual song identities """
+        folder = self.verifier_folder_input.get().strip()
+        if not folder or not os.path.exists(folder):
+            self.verifier_status_lbl.configure(text="Invalid folder path. Please select a valid folder.", text_color="#FB7185")
+            return
+
+        self.save_setting("plex_music_folder", folder)
+        self.verifier_is_scanning = True
+        self.verifier_cancel_event.clear()
+        self.verifier_scan_results = []
+        self.verifier_track_items = []
+
+        # Clear scrollable list
+        for child in self.verifier_scroll.winfo_children():
+            child.destroy()
+
+        self.verifier_progress_bar.set(0)
+        self.btn_verifier_start_scan.configure(state="disabled", text="Scanning Library... ⏳")
+        self.btn_verifier_fix_selected.configure(state="disabled")
+        self.btn_verifier_export.configure(state="disabled")
+        self.verifier_status_lbl.configure(text="Discovering audio files...", text_color="#78909C")
+        self.power_light.configure(text="● SCANNING", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
+
+        self.verifier_lbl_total.configure(text="0 Scanned")
+        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Mismatches")
+        self.verifier_lbl_verified.configure(text="0 ✅ Verified")
+        self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
+
+        def log_cb(msg: str):
+            self.log(f"[Fact-Checker] {msg}")
+
+        def progress_cb(curr: int, total: int, filename: str):
+            pct = curr / max(1, total)
+            self.after(0, lambda: self.verifier_progress_bar.set(pct))
+            self.after(0, lambda: self.verifier_counter_lbl.configure(text=f"{curr} / {total}"))
+            self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Acoustic Check ({curr}/{total}): {filename[:40]}"))
+            self.after(0, lambda: self.update_taskbar_progress(int(pct * 100)))
+
+        def item_cb(res: dict):
+            self.verifier_scan_results.append(res)
+            # Update stats
+            tot = len(self.verifier_scan_results)
+            mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+            ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
+            unr = sum(1 for r in self.verifier_scan_results if r.get("status") == "UNRECOGNIZED")
+            self.after(0, lambda: self.verifier_lbl_total.configure(text=f"{tot} Scanned"))
+            self.after(0, lambda: self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches"))
+            self.after(0, lambda: self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified"))
+            self.after(0, lambda: self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown"))
+
+        def run_scan():
+            self.log(f"Starting acoustic library fact-check on: {folder}")
+            try:
+                AudioFactChecker.scan_directory(
+                    root_dir=folder,
+                    progress_cb=progress_cb,
+                    item_cb=item_cb,
+                    cancel_event=self.verifier_cancel_event
+                )
+            except Exception as e:
+                self.log(f"Scan error: {e}", is_error=True)
+            self.after(0, self.on_verifier_scan_complete)
+
+        threading.Thread(target=run_scan, daemon=True).start()
+
+    def stop_fact_check_scan(self):
+        """ Cancels the ongoing acoustic scan """
+        if self.verifier_is_scanning:
+            self.verifier_cancel_event.set()
+            self.verifier_status_lbl.configure(text="Cancelling scan...", text_color="#FB7185")
+            self.log("Acoustic scan cancellation requested by user.")
+
+    def on_verifier_scan_complete(self):
+        self.verifier_is_scanning = False
+        self.btn_verifier_start_scan.configure(state="normal", text="🔍  Scan & Fact-Check")
+        self.btn_verifier_fix_selected.configure(state="normal")
+        self.btn_verifier_export.configure(state="normal")
+        self.update_taskbar_progress(0)
+        self.power_light.configure(
+            text=getattr(self, 'theme_cfg', {}).get("status_text", "● READY"),
+            text_color=getattr(self, 'theme_cfg', {}).get("status_color", "#38BDF8")
+        )
+
+        tot = len(self.verifier_scan_results)
+        mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+        ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
+        unr = sum(1 for r in self.verifier_scan_results if r.get("status") == "UNRECOGNIZED")
+
+        self.verifier_status_lbl.configure(
+            text=f"✓ Scan Complete: {tot} files scanned | {mis} mismatches found | {ver} verified",
+            text_color="#FB7185" if mis > 0 else "#4ADE80"
+        )
+        self.log(f"Scan finished: {tot} total files, {mis} tag mismatches detected, {ver} verified, {unr} unrecognized.")
+
+        self.render_verifier_results()
+
+    def set_verifier_filter(self, mode: str):
+        self.verifier_filter_mode = mode
+        self.render_verifier_results()
+
+    def toggle_all_verifier_items(self, state: bool):
+        for item in self.verifier_track_items:
+            item["var"].set(1 if state else 0)
+
+    def render_verifier_results(self):
+        """ Renders the list of scanned tracks with their match details into the scroll frame """
+        for child in self.verifier_scroll.winfo_children():
+            child.destroy()
+        self.verifier_track_items = []
+
+        cfg = getattr(self, 'theme_cfg', {})
+        card_bg = cfg.get("input_bg", "#070F15")
+        border_col = cfg.get("border", "#1F3A4E")
+        accent = cfg.get("accent", "#00E5FF")
+
+        filtered = []
+        for idx, res in enumerate(self.verifier_scan_results):
+            st = res.get("status", "")
+            if self.verifier_filter_mode == "mismatch" and st != "MISMATCH":
+                continue
+            if self.verifier_filter_mode == "verified" and st != "VERIFIED":
+                continue
+            if self.verifier_filter_mode == "unrec" and st != "UNRECOGNIZED":
+                continue
+            filtered.append((idx, res))
+
+        if not filtered:
+            msg = "No files match the selected filter." if self.verifier_scan_results else "No scan performed yet. Select your music folder and click 'Scan & Fact-Check'."
+            empty_lbl = ctk.CTkLabel(self.verifier_scroll, text=msg, font=("Segoe UI", 11), text_color="#78909C")
+            empty_lbl.pack(pady=30)
+            return
+
+        for original_idx, res in filtered:
+            st = res.get("status", "")
+            curr = res.get("current", {})
+            rec = res.get("recognized", {})
+
+            row_frame = ctk.CTkFrame(
+                self.verifier_scroll,
+                fg_color=card_bg,
+                corner_radius=8,
+                border_color="#FB7185" if st == "MISMATCH" else border_col,
+                border_width=1
+            )
+            row_frame.pack(fill="x", pady=3, padx=4)
+
+            # Checkbox
+            var = ctk.IntVar(value=1 if st == "MISMATCH" else 0)
+            cb = ctk.CTkCheckBox(
+                row_frame,
+                text="",
+                variable=var,
+                width=24,
+                checkbox_width=18,
+                checkbox_height=18,
+                corner_radius=4,
+                fg_color=cfg.get("option_btn", "#028090"),
+                hover_color=cfg.get("option_hover", "#00A896")
+            )
+            cb.pack(side="left", padx=(10, 6), pady=8)
+
+            # Status Badge
+            if st == "MISMATCH":
+                badge_text = "⚠️ WRONG TAG"
+                badge_color = "#FB7185"
+            elif st == "VERIFIED":
+                badge_text = "✅ VERIFIED"
+                badge_color = "#4ADE80"
+            elif st == "UNRECOGNIZED":
+                badge_text = "❓ UNKNOWN"
+                badge_color = "#94A3B8"
+            else:
+                badge_text = "⚠️ ERROR"
+                badge_color = "#F87171"
+
+            badge_lbl = ctk.CTkLabel(
+                row_frame,
+                text=badge_text,
+                font=("Segoe UI", 9, "bold"),
+                text_color=badge_color,
+                width=85,
+                anchor="w"
+            )
+            badge_lbl.pack(side="left", padx=(0, 8))
+
+            # Track Info Container
+            info_container = ctk.CTkFrame(row_frame, fg_color="transparent")
+            info_container.pack(side="left", fill="x", expand=True, pady=6)
+
+            # Row 1: File name & path
+            fn_lbl = ctk.CTkLabel(
+                info_container,
+                text=res.get("filename", ""),
+                font=("Segoe UI", 10, "bold"),
+                text_color=cfg.get("text_primary", "#F5F5F7"),
+                anchor="w"
+            )
+            fn_lbl.pack(fill="x")
+
+            # Row 2: Tagged vs Actual
+            curr_tag_str = f"Tag: {curr.get('artist', 'Unknown')} - {curr.get('title', 'Unknown')} [{curr.get('album', '')}]"
+            if rec.get("matched"):
+                rec_str = f"ACTUAL: {rec.get('artist')} - {rec.get('title')} [{rec.get('album')} ({rec.get('year')})]"
+                detail_text = f"{curr_tag_str}   ➔   {rec_str}"
+            else:
+                detail_text = f"{curr_tag_str}   (No audio match found)"
+
+            detail_lbl = ctk.CTkLabel(
+                info_container,
+                text=detail_text,
+                font=("Segoe UI", 9),
+                text_color="#FB7185" if st == "MISMATCH" else "#94A3B8",
+                anchor="w"
+            )
+            detail_lbl.pack(fill="x")
+
+            # Action Button per row
+            btn_fix = None
+            if st == "MISMATCH":
+                btn_fix = ctk.CTkButton(
+                    row_frame,
+                    text="🛠 Fix Track",
+                    width=75,
+                    height=26,
+                    font=("Segoe UI", 9, "bold"),
+                    command=lambda idx=original_idx: self.fix_single_verifier_track(idx)
+                )
+                btn_fix.pack(side="right", padx=10)
+
+            self.verifier_track_items.append({
+                "original_index": original_idx,
+                "result": res,
+                "var": var,
+                "row_frame": row_frame,
+                "checkbox": cb,
+                "badge_lbl": badge_lbl,
+                "detail_lbl": detail_lbl,
+                "btn_fix": btn_fix
+            })
+
+    def fix_single_verifier_track(self, track_index: int):
+        """ Fixes & re-tags a single mismatched track """
+        if track_index >= len(self.verifier_scan_results):
+            return
+
+        res = self.verifier_scan_results[track_index]
+        dest_root = self.verifier_folder_input.get().strip() or os.path.dirname(res.get("file_path"))
+        reorg = bool(self.verifier_reorg_switch.get())
+
+        self.verifier_status_lbl.configure(text=f"Fixing: {res.get('filename')}...", text_color="#00E5FF")
+
+        def run_fix():
+            out = AudioFactChecker.fix_and_retag(
+                file_path=res.get("file_path"),
+                verified_info=res,
+                destination_root=dest_root,
+                reorganize=reorg,
+                progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+            )
+            if out.get("success"):
+                res["status"] = "VERIFIED"
+                res["file_path"] = out.get("new_path", res.get("file_path"))
+                res["discrepancy_reason"] = "Re-tagged with verified acoustic match"
+                self.after(0, lambda: self.verifier_status_lbl.configure(
+                    text=f"✓ Fixed: {out.get('verified_artist')} - {out.get('verified_title')}",
+                    text_color="#4ADE80"
+                ))
+                self.after(0, self.render_verifier_results)
+            else:
+                self.after(0, lambda: self.verifier_status_lbl.configure(
+                    text=f"✗ Fix Failed: {out.get('error')}",
+                    text_color="#FB7185"
+                ))
+
+        threading.Thread(target=run_fix, daemon=True).start()
+
+    def fix_selected_verifier_tracks(self):
+        """ Fixes all selected tracks in batch """
+        selected = [item for item in self.verifier_track_items if item["var"].get() == 1]
+        if not selected:
+            self.verifier_status_lbl.configure(text="No tracks selected to fix. Please check at least one box.", text_color="#FB7185")
+            return
+
+        dest_root = self.verifier_folder_input.get().strip()
+        reorg = bool(self.verifier_reorg_switch.get())
+
+        self.btn_verifier_fix_selected.configure(state="disabled", text="Fixing & Re-tagging... ⏳")
+        self.verifier_progress_bar.set(0)
+        self.power_light.configure(text="● FIXING", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
+
+        def run_batch_fix():
+            total = len(selected)
+            fixed_count = 0
+            for idx, item in enumerate(selected, start=1):
+                res = item["result"]
+                pct = idx / total
+                self.after(0, lambda p=pct: self.verifier_progress_bar.set(p))
+                self.after(0, lambda i=idx, t=total: self.verifier_counter_lbl.configure(text=f"{i} / {t}"))
+                self.after(0, lambda r=res: self.verifier_status_lbl.configure(text=f"Fixing ({idx}/{total}): {r.get('filename')[:40]}"))
+
+                out = AudioFactChecker.fix_and_retag(
+                    file_path=res.get("file_path"),
+                    verified_info=res,
+                    destination_root=dest_root,
+                    reorganize=reorg,
+                    progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+                )
+                if out.get("success"):
+                    fixed_count += 1
+                    res["status"] = "VERIFIED"
+                    res["file_path"] = out.get("new_path", res.get("file_path"))
+                    res["discrepancy_reason"] = "Re-tagged with verified acoustic match"
+
+            self.after(0, lambda: self.btn_verifier_fix_selected.configure(state="normal", text="🛠  Fix & Re-tag Selected Mismatches"))
+            self.after(0, lambda: self.verifier_status_lbl.configure(
+                text=f"✓ Complete! {fixed_count} / {total} mismatched tracks corrected.",
+                text_color="#4ADE80"
+            ))
+            self.after(0, lambda: self.update_taskbar_progress(0))
+            self.after(0, lambda: self.power_light.configure(
+                text=getattr(self, 'theme_cfg', {}).get("status_text", "● READY"),
+                text_color=getattr(self, 'theme_cfg', {}).get("status_color", "#38BDF8")
+            ))
+            self.after(0, self.render_verifier_results)
+            self.send_notification("Fact-Checker Complete", f"{fixed_count} mismatched songs have been corrected in your library!")
+
+        threading.Thread(target=run_batch_fix, daemon=True).start()
+
+    def export_verifier_report(self):
+        """ Exports report to desktop or file dialog """
+        if not self.verifier_scan_results:
+            self.verifier_status_lbl.configure(text="No results to export. Run a scan first.", text_color="#FB7185")
+            return
+
+        from tkinter import filedialog
+        file_path = filedialog.asksaveasfilename(
+            title="Export Fact-Check Report",
+            defaultextension=".txt",
+            filetypes=[("Text Report", "*.txt"), ("CSV File", "*.csv"), ("JSON File", "*.json")]
+        )
+        if file_path:
+            fmt = "txt"
+            if file_path.endswith(".csv"):
+                fmt = "csv"
+            elif file_path.endswith(".json"):
+                fmt = "json"
+
+            AudioFactChecker.export_report(self.verifier_scan_results, file_path, fmt=fmt)
+            self.verifier_status_lbl.configure(text=f"Report exported to: {os.path.basename(file_path)}", text_color="#4ADE80")
+            self.log(f"Fact-check report exported to: {file_path}")
 
     def persist_current_state(self):
         """Saves dynamic UI inputs so previous selections are remembered on next launch."""

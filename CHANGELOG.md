@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Local to Plexamp Organizer & Tagger**:
+  - Full-featured section for scanning, cleaning, tagging, and organizing local audio files (`.mp3`, `.flac`, `.m4a`, `.wav`, `.aac`, `.ogg`, `.opus`, `.wma`) directly into Plexamp.
+  - Recursive directory traversal with embedded tag extraction and smart filename parsing.
+  - Automatic master catalog enrichment via iTunes Search API and LRCLIB for studio albums, release dates, track numbers, and 1400×1400 artwork.
+  - Lossless direct copy or high-quality conversion via `ffmpeg`, with ID3v2.4/FLAC/MP4 tags, `.lrc` lyrics, ReplayGain normalization, and Plex standard folder hierarchy.
+
+- **YouTube to Plexamp Engine & UI Section**:
+  - Full-featured section for downloading YouTube / YouTube Music playlists, albums, and videos directly into Plexamp.
+  - Smart title and artist cleaner stripping video clutter (`Official Video`, `[4K]`, `Lyric Video`).
+  - Automatic metadata enrichment using iTunes Search API & LRCLIB for studio albums, release dates, and 1400×1400 square artwork.
+  - Center-square 1:1 auto-cropping for 16:9 YouTube thumbnails.
+  - Mutagen tagging (`ID3v2.4`, `FLAC`, `MP4`), synchronized `.lrc` lyrics sidecars, ReplayGain normalization, and Plex standard folder hierarchy.
+
+- **Performance & Reliability Optimizations**:
+  - Added Windows file-lock retry mechanism (`safe_move_file` and `safe_save_tags`) with exponential backoff to eliminate `[WinError 32]` collisions with Windows Defender and Plex Indexer.
+  - Implemented in-memory iTunes metadata caching to eliminate redundant HTTP requests across album/playlist sync operations.
+  - Added segment length capping (max 80 chars per segment) in `sanitize_filename` to prevent Windows `MAX_PATH` overflow.
+  - Added native multi-disc album organization (`Disc 01 / Disc 02` subfolders and `1-01` numbering) across Spotify, YouTube, and Local Plexamp engines.
+  - Added safe-move validation in Local to Plexamp ensuring source files are only removed if destination is verified $> 100\text{ KB}$.
+
+
 ### Fixed
 - support Spotify 2026 /items endpoint for unlimited playlist track pagination (bfafde7)
 

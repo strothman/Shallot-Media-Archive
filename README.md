@@ -22,6 +22,20 @@
 - **Plex Standard Folder Structure**: Organizes files into `Music / Artist / Album / 01 - Track Title.ext` and writes `cover.jpg` for instant Plex scanner recognition.
 - **Multiple Audio Formats**: Supports MP3 (320 kbps), FLAC (Lossless), and M4A (AAC 256 kbps).
 
+### ▶️ YouTube to Plexamp Sync
+- **Direct Audio Extraction**: Download directly from YouTube / YouTube Music playlist, album, or video URLs without requiring search matching.
+- **Smart Title & Artist Cleaner**: Strips clutter like `(Official Music Video)`, `[HD 4K]`, `(Lyric Video)`, and splits artist/title into clean tags.
+- **Automatic Metadata Enrichment**: Enriches tracks with iTunes Search API / LRCLIB data for studio album names, release dates, and 1400×1400 square cover art.
+- **Center-Square Artwork Cropping**: Auto-crops 16:9 widescreen thumbnails to centered 1:1 square artwork for Plexamp compatibility.
+- **Synced Lyrics & ReplayGain**: Full parity with Spotify to Plexamp, including `.lrc` sidecars and volume normalization.
+
+### 📁 Local to Plexamp Organizer & Tagger
+- **Recursive Multi-Folder Scanning**: Scans any local directory or nested subdirectories for all audio formats (`.mp3`, `.flac`, `.m4a`, `.wav`, `.aac`, `.ogg`, `.opus`, `.wma`).
+- **Embedded Tag & Filename Fallback**: Reads existing audio metadata or uses smart regex to clean raw filenames into pristine Artist and Title tags.
+- **Master Catalog Enrichment**: Looks up official studio albums, release years, track numbers, and 1400×1400 high-res artwork via iTunes and LRCLIB.
+- **Lossless Copy or Transcode**: Direct lossless copy for native MP3/FLAC/M4A or automated high-quality transcode via `ffmpeg`.
+- **Automatic Organization**: Sorts files into standard Plexamp structure (`Music / Artist / Album / 01 - Song.ext`), writes `cover.jpg`, and drops `.lrc` lyrics.
+
 ### 📥 YouTube & Web Media Downloader
 - **Universal Downloader Engine**: Powered by `yt-dlp` and `ffmpeg` for downloading full playlists, video ranges, or standalone media.
 - **Quality & Format Selection**: Supports resolutions up to 4K (2160p), 2K, 1080p, 720p, and custom audio bitrate extraction.
@@ -31,14 +45,11 @@
 ### 🔍 YouTube Search Tab
 - Search YouTube directly from inside the app with rich thumbnail cards and one-click import into the download queue.
 
-### 🎨 Modern UI & 6 Vibrant Themes
-- CustomTkinter dark-mode interface with dynamic palette switching:
-  - **Obsidian** (Violet & Slate)
-  - **Vapor** (Neon Pink & Purple)
-  - **Arctic** (Cyan & Deep Navy)
-  - **Ember** (Rose & Charcoal)
-  - **Twilight** (Lavender & Indigo)
-  - **Cipher** (Emerald & Forest)
+### 🎨 Modern UI & 3 Professional High-Readability Themes
+- CustomTkinter dark-mode interface with clean typography and high contrast:
+  - **Midnight** (Studio Slate & Electric Azure) — Crisp, modern dark theme with maximum readability.
+  - **Carbon** (Minimalist Matte & Studio Emerald) — Neutral zinc & charcoal palette with vibrant emerald accents.
+  - **Nordic** (Deep Navy & Indigo) — Refined Scandinavian enterprise palette with periwinkle/indigo highlights.
 
 ---
 

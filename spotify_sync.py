@@ -23,6 +23,8 @@ from mutagen.id3 import (
 from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
 
+import time
+
 BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
 CREATION_FLAGS_BACKGROUND = (
     (subprocess.CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
@@ -30,8 +32,42 @@ CREATION_FLAGS_BACKGROUND = (
 )
 
 
-def sanitize_filename(name: str, max_len: int = 120) -> str:
-    """Removes invalid filesystem characters for Windows/Linux/macOS."""
+def safe_move_file(src: str, dst: str, max_retries: int = 4, delay: float = 0.35) -> bool:
+    """Moves a file safely on Windows, retrying on transient locks (e.g. Defender, Indexer)."""
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(dst) and os.path.abspath(src) != os.path.abspath(dst):
+                try:
+                    os.remove(dst)
+                except Exception:
+                    pass
+            shutil.move(src, dst)
+            return True
+        except (PermissionError, OSError) as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay * (attempt + 1))
+            else:
+                raise e
+    return False
+
+
+def safe_save_tags(audio_obj, *args, **kwargs) -> bool:
+    """Saves Mutagen tags with automatic retry for Windows file locks."""
+    for attempt in range(4):
+        try:
+            audio_obj.save(*args, **kwargs)
+            return True
+        except (PermissionError, OSError) as e:
+            if attempt < 3:
+                time.sleep(0.35 * (attempt + 1))
+            else:
+                raise e
+    return False
+
+
+def sanitize_filename(name: str, max_len: int = 80) -> str:
+    """Removes invalid filesystem characters and limits length to prevent Windows MAX_PATH errors."""
     if not name:
         return "Unknown"
     # Strip invalid chars: < > : " / \ | ? * and control chars
@@ -900,7 +936,7 @@ class PlexampTagger:
                 data=img_data
             ))
 
-        tags.save(file_path, v2_version=3)
+        safe_save_tags(tags, file_path, v2_version=3)
 
     @staticmethod
     def _tag_flac(
@@ -942,7 +978,7 @@ class PlexampTagger:
                 pic.data = f.read()
             audio.add_picture(pic)
 
-        audio.save()
+        safe_save_tags(audio)
 
     @staticmethod
     def _tag_mp4(
@@ -979,7 +1015,7 @@ class PlexampTagger:
             cov_fmt = MP4Cover.FORMAT_JPEG if cover_path.lower().endswith((".jpg", ".jpeg")) else MP4Cover.FORMAT_PNG
             audio["covr"] = [MP4Cover(cov_data, imageformat=cov_fmt)]
 
-        audio.save()
+        safe_save_tags(audio)
 
 
 class SpotifyPlexampPipeline:
@@ -1034,6 +1070,8 @@ class SpotifyPlexampPipeline:
         t_album = track.get("album", "Singles")
         t_title = track.get("title", "Unknown Track")
         t_num = int(track.get("track_number", 1))
+        disc_num = int(track.get("disc_number", 1))
+        total_discs = int(track.get("total_discs", 1))
 
         clean_artist = sanitize_filename(t_artist)
         clean_album = sanitize_filename(t_album)
@@ -1041,7 +1079,10 @@ class SpotifyPlexampPipeline:
         ext = "flac" if "flac" in audio_format.lower() else ("m4a" if "m4a" in audio_format.lower() else "mp3")
 
         if folder_structure == "plex_standard":
-            dest_dir = os.path.join(base_music_dir, clean_artist, clean_album)
+            if disc_num > 1 or total_discs > 1:
+                dest_dir = os.path.join(base_music_dir, clean_artist, clean_album, f"Disc {disc_num:02d}")
+            else:
+                dest_dir = os.path.join(base_music_dir, clean_artist, clean_album)
             dest_filename = f"{t_num:02d} - {clean_title}.{ext}"
         else:
             plist_name = sanitize_filename(collection.get("title", "Spotify Playlist"))
@@ -1246,8 +1287,8 @@ class SpotifyPlexampPipeline:
                             self.track_status_cb(track_index, "❌ Missing", "#FB7185")
                     return
 
-                # Move to destination
-                shutil.move(downloaded_file, final_file_path)
+                # Move to destination safely
+                safe_move_file(downloaded_file, final_file_path)
 
                 if self.track_status_cb:
                     self.track_status_cb(track_index, "Tagging...", "#C084FC")

@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added native multi-disc album organization (`Disc 01 / Disc 02` subfolders and `1-01` numbering) across Spotify, YouTube, and Local Plexamp engines.
   - Added safe-move validation in Local to Plexamp ensuring source files are only removed if destination is verified $> 100\text{ KB}$.
 
+- **Streamlined 3 Professional Visual Themes**:
+  - Reduced theme options to **Midnight** (Studio Slate & Electric Azure), **Carbon** (Minimalist Matte & Emerald), and **Nordic** (Deep Navy & Indigo) for maximum readability and high contrast.
+
+- add licensing, implement process throttling, improve tracklist rendering performance, and add clear completed functionality (8b5de11)
 
 ### Fixed
 - support Spotify 2026 /items endpoint for unlimited playlist track pagination (bfafde7)

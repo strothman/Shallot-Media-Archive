@@ -75,15 +75,43 @@ def normalize_text(text: str) -> str:
     return s
 
 
+def is_censored_match(s1: str, s2: str) -> bool:
+    """Checks if s2 is an asterisk/bullet censored version of s1 (e.g. Dickhead vs D******d)."""
+    if not s1 or not s2:
+        return False
+    w1 = s1.lower().strip()
+    w2 = s2.lower().strip()
+    if w1 == w2:
+        return True
+    if '*' in w2 or '•' in w2:
+        p = re.escape(w2).replace(r'\*', '.').replace(r'\•', '.')
+        try:
+            if re.fullmatch(p, w1):
+                return True
+        except Exception:
+            pass
+    if '*' in w1 or '•' in w1:
+        p = re.escape(w1).replace(r'\*', '.').replace(r'\•', '.')
+        try:
+            if re.fullmatch(p, w2):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def string_similarity(s1: str, s2: str) -> float:
-    """Computes token set similarity ratio between two normalized strings."""
+    """Computes token set similarity ratio between two normalized strings with censorship handling."""
+    if is_censored_match(s1, s2):
+        return 1.0
+
     n1 = normalize_text(s1)
     n2 = normalize_text(s2)
     if not n1 and not n2:
         return 1.0
     if not n1 or not n2:
         return 0.0
-    if n1 == n2:
+    if n1 == n2 or is_censored_match(n1, n2):
         return 1.0
     if n1 in n2 or n2 in n1:
         return 0.90

@@ -1895,20 +1895,33 @@ class DownloaderApp(ctk.CTk):
             anchor="w"
         )
         self.verifier_workers_lbl.pack(fill="x", padx=15, pady=(0, 6))
-        self.theme_labels_secondary.append(self.verifier_workers_lbl)
-
         v_act_btns = ctk.CTkFrame(self.verifier_action_card, fg_color="transparent")
         v_act_btns.pack(fill="x", padx=15, pady=(0, 8))
 
         self.btn_verifier_fix_selected = ctk.CTkButton(
             v_act_btns,
-            text="🛠  Fix & Re-tag Selected Mismatches",
-            font=("Segoe UI", 12, "bold"),
+            text="🛠  Fix & Re-tag Selected",
+            font=("Segoe UI", 11, "bold"),
             height=36,
             corner_radius=8,
             command=self.fix_selected_verifier_tracks
         )
         self.btn_verifier_fix_selected.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_verifier_keep_selected = ctk.CTkButton(
+            v_act_btns,
+            text="✅  Keep Selected Tags (Mark Verified)",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            corner_radius=8,
+            fg_color="#064E3B",
+            hover_color="#047857",
+            border_color="#34D399",
+            border_width=1,
+            text_color="#34D399",
+            command=self.mark_selected_verifier_tracks_as_verified
+        )
+        self.btn_verifier_keep_selected.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.btn_verifier_export = ctk.CTkButton(
             v_act_btns,
@@ -4893,6 +4906,7 @@ class DownloaderApp(ctk.CTk):
 
             # Action Button per row
             btn_fix = None
+            btn_keep = None
             if st == "MISMATCH":
                 btn_fix = ctk.CTkButton(
                     row_frame,
@@ -4902,7 +4916,22 @@ class DownloaderApp(ctk.CTk):
                     font=("Segoe UI", 9, "bold"),
                     command=lambda idx=original_idx: self.fix_single_verifier_track(idx)
                 )
-                btn_fix.pack(side="right", padx=10)
+                btn_fix.pack(side="right", padx=(4, 10))
+
+                btn_keep = ctk.CTkButton(
+                    row_frame,
+                    text="✅ Keep Tags",
+                    width=80,
+                    height=26,
+                    font=("Segoe UI", 9, "bold"),
+                    fg_color="#1E293B",
+                    hover_color="#334155",
+                    border_color="#34D399",
+                    border_width=1,
+                    text_color="#34D399",
+                    command=lambda idx=original_idx: self.mark_verifier_track_as_verified(idx)
+                )
+                btn_keep.pack(side="right", padx=(0, 2))
 
             self.verifier_track_items.append({
                 "original_index": original_idx,
@@ -4912,8 +4941,89 @@ class DownloaderApp(ctk.CTk):
                 "checkbox": cb,
                 "badge_lbl": badge_lbl,
                 "detail_lbl": detail_lbl,
-                "btn_fix": btn_fix
+                "btn_fix": btn_fix,
+                "btn_keep": btn_keep
             })
+
+    def mark_verifier_track_as_verified(self, track_index: int):
+        """ Marks a mismatched track as VERIFIED (false positive / keep current tags) """
+        if track_index >= len(self.verifier_scan_results):
+            return
+        res = self.verifier_scan_results[track_index]
+        res["status"] = "VERIFIED"
+        res["discrepancy_reason"] = "Kept current tags (False positive match ignored)"
+
+        file_path = res.get("file_path")
+        if file_path and os.path.exists(file_path):
+            try:
+                cache = AudioFactChecker.load_cache()
+                st = os.stat(file_path)
+                cache[file_path] = {
+                    "mtime": st.st_mtime,
+                    "size": st.st_size,
+                    "result": res
+                }
+                AudioFactChecker.save_cache(cache)
+            except Exception as e:
+                print(f"Error saving marked track to cache: {e}")
+
+        tot = len(self.verifier_scan_results)
+        mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+        ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
+        unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
+        self.verifier_lbl_total.configure(text=f"{tot} Scanned")
+        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches")
+        self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
+        self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+        self.verifier_status_lbl.configure(
+            text=f"✓ Kept Current Tags: {res.get('filename')}",
+            text_color="#4ADE80"
+        )
+        self.log(f"[Fact-Checker] Kept current tags for: {res.get('filename')} (marked Verified)")
+        self.render_verifier_results()
+
+    def mark_selected_verifier_tracks_as_verified(self):
+        """ Marks all selected tracks as VERIFIED (keeps current tags and saves to cache) """
+        selected = [item for item in self.verifier_track_items if item["var"].get() == 1]
+        if not selected:
+            self.verifier_status_lbl.configure(text="No tracks selected. Please check at least one box.", text_color="#FB7185")
+            return
+
+        cache = AudioFactChecker.load_cache()
+        marked_count = 0
+        for item in selected:
+            res = item["result"]
+            res["status"] = "VERIFIED"
+            res["discrepancy_reason"] = "Kept current tags (False positive match ignored)"
+            file_path = res.get("file_path")
+            if file_path and os.path.exists(file_path):
+                try:
+                    st = os.stat(file_path)
+                    cache[file_path] = {
+                        "mtime": st.st_mtime,
+                        "size": st.st_size,
+                        "result": res
+                    }
+                    marked_count += 1
+                except Exception:
+                    pass
+
+        AudioFactChecker.save_cache(cache)
+
+        tot = len(self.verifier_scan_results)
+        mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+        ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
+        unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
+        self.verifier_lbl_total.configure(text=f"{tot} Scanned")
+        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches")
+        self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
+        self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+        self.verifier_status_lbl.configure(
+            text=f"✓ Marked {marked_count} tracks as Verified (Current tags kept)",
+            text_color="#4ADE80"
+        )
+        self.log(f"[Fact-Checker] Marked {marked_count} tracks as Verified (Kept current tags in cache).")
+        self.render_verifier_results()
 
     def fix_single_verifier_track(self, track_index: int):
         """ Fixes & re-tags a single mismatched track """

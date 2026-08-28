@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- add manual verification and censorship-aware string matching to audio verifier (38d809e)
+
 ### Changed
 - chore: add shallot icon and update verifier cache with new track metadata (b1bd3c4)
 

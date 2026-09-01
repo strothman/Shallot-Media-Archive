@@ -714,7 +714,7 @@ class LyricsFetcher:
         if duration_s > 0:
             params["duration"] = int(duration_s)
 
-        headers = {"User-Agent": "ShallotMediaArchive/1.1 (https://github.com/strothman/util-SMArchive)"}
+        headers = {"User-Agent": "ShallotMediaArchive/1.1 (https://github.com/strothman/Shallot-Media-Archive)"}
 
         # 1. Direct fetch
         try:

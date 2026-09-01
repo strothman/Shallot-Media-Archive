@@ -63,8 +63,8 @@
 ### 2. Installation
 ```powershell
 # Clone the repository
-git clone https://github.com/strothman/util-SMArchive.git
-cd util-SMArchive
+git clone https://github.com/strothman/Shallot-Media-Archive.git
+cd Shallot-Media-Archive
 
 # Create virtual environment & install dependencies
 python -m venv .venv

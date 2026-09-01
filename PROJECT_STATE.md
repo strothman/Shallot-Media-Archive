@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-09-01  
 **Current Version:** `1.1.0`  
-**Repository:** `strothman/util-SMArchive`  
+**Repository:** `strothman/Shallot-Media-Archive`  
 **Primary Language / Framework:** Python 3.11+ / CustomTkinter (Dark Mode GUI)
 
 ---
@@ -16,7 +16,7 @@
 ## 2. Architecture & Core Components
 
 ```
-util-SMArchive/
+Shallot-Media-Archive/
 ├── app.py                      # Main GUI application (CustomTkinter, threading, tabs, UI themes)
 ├── spotify_sync.py             # Spotify metadata fetcher (Embed scrape, OAuth 1-click server, Web API) & YTM downloader
 ├── youtube_sync.py             # Direct YouTube playlist/track downloader & metadata enricher (iTunes/LRCLIB)

@@ -4,7 +4,7 @@
 #define MyAppName "Shallot Media Archive"
 #define MyAppVersion "1.1.0"
 #define MyAppPublisher "Shallot Media"
-#define MyAppURL "https://github.com/strothman/util-SMArchive"
+#define MyAppURL "https://github.com/strothman/Shallot-Media-Archive"
 #define MyAppExeName "ShallotMediaArchive.exe"
 
 [Setup]

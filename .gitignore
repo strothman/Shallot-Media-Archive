@@ -63,6 +63,8 @@ error_log.json
 *.log
 downloader_errors.txt
 cookies.txt
+verifier_cache.json*
+fact_check_report.json*
 
 # Application Temp & Scratch Files
 scratch/

@@ -1660,7 +1660,7 @@ class DownloaderApp(ctk.CTk):
 
         self.verifier_folder_input = ctk.CTkEntry(
             v_input_frame,
-            placeholder_text="e.g. \\\\joandesk\\Music\\Strothman or local music directory...",
+            placeholder_text="e.g. D:\\Music or \\\\server\\Music\\Library...",
             height=32,
             fg_color="#070F15",
             border_color="#1F3A4E",

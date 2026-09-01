@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- chore: rename repository references to Shallot-Media-Archive (e6c7a0f)
+
+### Changed
 - chore(security): sanitize UI placeholder, untrack verifier cache, and add PROJECT_STATE.md (d0295fe)
 
 ### Added

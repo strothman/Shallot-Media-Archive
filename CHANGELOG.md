@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- chore(security): sanitize UI placeholder, untrack verifier cache, and add PROJECT_STATE.md (d0295fe)
+
 ### Added
 - add manual verification and censorship-aware string matching to audio verifier (38d809e)
 

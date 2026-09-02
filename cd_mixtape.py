@@ -496,10 +496,12 @@ class CDMixtapePlanner:
         transcode_lossless_to_mp3: bool = True,
         target_mp3_kbps: int = 320,
         custom_capacity_mb: Optional[int] = None,
+        max_vibe_tracks_per_artist: int = 3,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict:
         """
-        Plans the full mixtape to fill capacity cleanly with ZERO duplicates.
+        Plans the full mixtape to fill capacity cleanly with ZERO duplicates
+        and a maximum of 3 songs per vibe artist to ensure great musical diversity.
         """
         preset = CAPACITY_PRESETS.get(preset_key, CAPACITY_PRESETS["700MB_DATA_CD"])
         cap_type = preset["type"]
@@ -560,6 +562,7 @@ class CDMixtapePlanner:
         selected_tracks: List[Dict] = []
         used_file_paths = set()
         used_track_keys = set()
+        vibe_artist_counts: Dict[str, int] = {}
         current_metric_total = 0
         current_bytes_total = 0
 
@@ -619,9 +622,9 @@ class CDMixtapePlanner:
             else:
                 break
 
-        # Phase 2: Collect Vibe Tracks from Related Artists
+        # Phase 2: Collect Vibe Tracks from Related Artists (Max 3 tracks per vibe artist)
         if progress_callback:
-            progress_callback("Filling remaining capacity with related vibe artists...")
+            progress_callback("Filling remaining capacity with related vibe artists (max 3 per artist)...")
 
         candidate_vibe_tracks: List[Tuple[Dict, int, str, str]] = []
 
@@ -638,18 +641,30 @@ class CDMixtapePlanner:
         for norm_art, loc_tracks in self.library_index.artists_map.items():
             if norm_art in related_norm_map:
                 disp_art, weight = related_norm_map[norm_art]
+                
+                # Sort artist tracks if we have multiple, keeping highest priority
+                unique_artist_tracks = []
                 for loc_trk in loc_tracks:
                     trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
                     if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys and trk_key not in seen_candidate_keys:
                         seen_candidate_keys.add(trk_key)
-                        candidate_vibe_tracks.append((loc_trk, weight, "vibe", f"Vibe: {disp_art}"))
+                        unique_artist_tracks.append(loc_trk)
+
+                # Queue up to max_vibe_tracks_per_artist tracks for this vibe artist
+                for loc_trk in unique_artist_tracks[:max_vibe_tracks_per_artist]:
+                    candidate_vibe_tracks.append((loc_trk, weight, "vibe", f"Vibe: {disp_art}"))
 
         # Sort candidate vibe tracks by similarity weight descending
         candidate_vibe_tracks.sort(key=lambda x: x[1], reverse=True)
 
         for loc_trk, pop_score, role, role_desc in candidate_vibe_tracks:
             trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+            art_key = loc_trk["norm_artist"]
+
             if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
+                continue
+
+            if vibe_artist_counts.get(art_key, 0) >= max_vibe_tracks_per_artist:
                 continue
 
             m_val, est_b = get_track_metric(loc_trk)
@@ -658,6 +673,7 @@ class CDMixtapePlanner:
                 current_bytes_total += est_b
                 used_file_paths.add(loc_trk["file_path"])
                 used_track_keys.add(trk_key)
+                vibe_artist_counts[art_key] = vibe_artist_counts.get(art_key, 0) + 1
                 selected_tracks.append({
                     **loc_trk,
                     "effective_bytes": est_b,
@@ -667,7 +683,7 @@ class CDMixtapePlanner:
                     "will_transcode": transcode_lossless_to_mp3 and loc_trk["is_lossless"]
                 })
 
-        # Phase 3: Knapsack Gap-Filler (Puzzle-Piece fitting)
+        # Phase 3: Knapsack Gap-Filler (Puzzle-Piece fitting, max 1 filler track per artist)
         remaining_capacity = target_limit - current_metric_total
         min_slot_size = 500 * 1024 if cap_type == "bytes" else 30
         
@@ -684,6 +700,8 @@ class CDMixtapePlanner:
                     seen_rem_keys.add(trk_key)
                     remaining_library_tracks.append(t)
 
+            filler_artist_counts: Dict[str, int] = {}
+
             while remaining_capacity > min_slot_size and remaining_library_tracks:
                 best_fit = None
                 best_diff = float("inf")
@@ -691,6 +709,11 @@ class CDMixtapePlanner:
                 best_est_b = 0
 
                 for candidate in remaining_library_tracks:
+                    c_art = candidate["norm_artist"]
+                    # Limit filler tracks per artist to max 1 for maximum diversity
+                    if filler_artist_counts.get(c_art, 0) >= 1 or vibe_artist_counts.get(c_art, 0) >= max_vibe_tracks_per_artist:
+                        continue
+
                     m_val, est_b = get_track_metric(candidate)
                     if m_val <= remaining_capacity:
                         diff = remaining_capacity - m_val
@@ -702,6 +725,9 @@ class CDMixtapePlanner:
 
                 if best_fit:
                     best_key = canonical_track_key(best_fit["artist"], best_fit["title"])
+                    c_art = best_fit["norm_artist"]
+                    filler_artist_counts[c_art] = filler_artist_counts.get(c_art, 0) + 1
+
                     remaining_library_tracks = [
                         t for t in remaining_library_tracks
                         if t["file_path"] != best_fit["file_path"] and canonical_track_key(t["artist"], t["title"]) != best_key

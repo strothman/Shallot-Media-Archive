@@ -2182,28 +2182,42 @@ class DownloaderApp(ctk.CTk):
         self.cd_max_vibe_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_max_vibe_menu)
 
-        # Col 3: Transcode / Bitrate
-        f_trans = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_trans.grid(row=0, column=3, sticky="ew", padx=(0, 6))
-        lbl_trans = ctk.CTkLabel(f_trans, text="Transcode MP3 Bitrate", font=("Segoe UI", 9, "bold"), text_color="#78909C")
-        lbl_trans.pack(anchor="w")
-        self.theme_labels_secondary.append(lbl_trans)
-        self.cd_bitrate_menu = ctk.CTkOptionMenu(
-            f_trans,
-            values=["320 kbps (High Quality)", "256 kbps (VBR/CBR)", "192 kbps (More Songs)"],
+        # Col 3: Max Track Duration (Anti-Bloat Filter)
+        f_dur_max = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_dur_max.grid(row=0, column=3, sticky="ew", padx=(0, 6))
+        lbl_dmax = ctk.CTkLabel(f_dur_max, text="Max Song Length", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_dmax.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_dmax)
+        self.cd_max_dur_menu = ctk.CTkOptionMenu(
+            f_dur_max,
+            values=[
+                "4:30 (Max Single - No Bloat)",
+                "4:00 (Radio Fast)",
+                "5:00 (Standard)",
+                "6:00 (Extended)",
+                "No Limit"
+            ],
             height=28,
             font=("Segoe UI", 10)
         )
-        self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
-        self.theme_option_menus.append(self.cd_bitrate_menu)
+        self.cd_max_dur_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_max_dur_menu)
 
-        # Col 4: Transcode switch & Generate button
+        # Col 4: Transcode switch, Bitrate, and Generate button
         f_action_top = ctk.CTkFrame(cd_grid, fg_color="transparent")
         f_action_top.grid(row=0, column=4, sticky="ew")
         
+        self.cd_bitrate_menu = ctk.CTkOptionMenu(
+            f_action_top,
+            values=["320k Transcode", "256k Transcode", "192k Transcode"],
+            height=22,
+            font=("Segoe UI", 9)
+        )
+        self.theme_option_menus.append(self.cd_bitrate_menu)
+
         self.cd_transcode_switch = ctk.CTkSwitch(
             f_action_top,
-            text="Squeeze/Transcode FLAC",
+            text="Squeeze FLAC",
             font=("Segoe UI", 9),
             height=16
         )
@@ -5659,6 +5673,19 @@ class DownloaderApp(ctk.CTk):
             m_vibe = re.search(r'\d+', raw_max_vibe)
             max_vibe_cnt = int(m_vibe.group()) if m_vibe else 3
 
+        # Parse max song duration (anti-bloat filter)
+        raw_dur = self.cd_max_dur_menu.get()
+        if "no limit" in raw_dur.lower() or "unlimited" in raw_dur.lower():
+            max_dur_s = 0
+        elif ":" in raw_dur:
+            m_time = re.search(r'(\d+):(\d+)', raw_dur)
+            if m_time:
+                max_dur_s = int(m_time.group(1)) * 60 + int(m_time.group(2))
+            else:
+                max_dur_s = 270
+        else:
+            max_dur_s = 270
+
         # Parse transcode & bitrate
         transcode_lossless = bool(self.cd_transcode_switch.get())
         raw_br = self.cd_bitrate_menu.get()
@@ -5692,6 +5719,7 @@ class DownloaderApp(ctk.CTk):
                     transcode_lossless_to_mp3=transcode_lossless,
                     target_mp3_kbps=bitrate_kbps,
                     max_vibe_tracks_per_artist=max_vibe_cnt,
+                    max_song_duration_s=max_dur_s,
                     progress_callback=lambda msg: self.after(0, lambda m=msg: self.cd_export_status_lbl.configure(text=m, text_color="#38BDF8"))
                 )
                 self.cd_mixtape_plan = plan

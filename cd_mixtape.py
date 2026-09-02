@@ -478,6 +478,34 @@ def canonical_track_key(artist: str, title: str) -> str:
     return f"{na}:::{nt}"
 
 
+BLOAT_TITLE_REGEX = re.compile(
+    r'\b(full album|complete album|ost mix|lofi mix|hour mix|compilation|soundtrack mix|non-stop|all songs|entire discography|extended mix|marathon)\b',
+    re.IGNORECASE
+)
+
+
+def is_valid_mixtape_track(trk: Dict, max_dur_s: int = 270) -> bool:
+    """Filters out mega-mixes, full album compilations, podcast episodes, and ultra-short skits."""
+    dur = trk.get("duration_s", 0)
+    # Check max duration (default 4:30 = 270s) and min duration (40s)
+    if dur > 0:
+        if max_dur_s > 0 and dur > max_dur_s:
+            return False
+        if dur < 35:
+            return False
+
+    # Check bloat compilation keywords
+    title_str = f"{trk.get('title', '')} {trk.get('album', '')} {trk.get('filename', '')}"
+    if BLOAT_TITLE_REGEX.search(title_str):
+        return False
+
+    # Check extreme standalone filesize for lossy audio (e.g. 300MB mp3 files)
+    if not trk.get("is_lossless", False) and trk.get("size_bytes", 0) > 30 * 1024 * 1024:
+        return False
+
+    return True
+
+
 class CDMixtapePlanner:
     """
     Coordinates Spotify recommendations, local library matching,
@@ -497,11 +525,12 @@ class CDMixtapePlanner:
         target_mp3_kbps: int = 320,
         custom_capacity_mb: Optional[int] = None,
         max_vibe_tracks_per_artist: int = 3,
+        max_song_duration_s: int = 270,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict:
         """
-        Plans the full mixtape to fill capacity cleanly with ZERO duplicates
-        and a maximum of 3 songs per vibe artist to ensure great musical diversity.
+        Plans the full mixtape to fill capacity cleanly with ZERO duplicates,
+        strict max song length (<= 4:30 to eliminate bloat mixes), and high diversity.
         """
         preset = CAPACITY_PRESETS.get(preset_key, CAPACITY_PRESETS["700MB_DATA_CD"])
         cap_type = preset["type"]
@@ -566,7 +595,7 @@ class CDMixtapePlanner:
         current_metric_total = 0
         current_bytes_total = 0
 
-        # Phase 1: Match Seed Artist Top Tracks
+        # Phase 1: Match Seed Artist Top Tracks (Seed tracks can exceed 4:30 only if user specifically wanted that seed song, but skip extreme bloat)
         matched_seed_tracks = []
         for s_trk in spotify_seed_tracks:
             norm_title = normalize_string(s_trk["title"])
@@ -574,6 +603,8 @@ class CDMixtapePlanner:
             for loc_trk in local_seed_tracks:
                 trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
                 if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
+                    continue
+                if not is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s + 60):
                     continue
                 loc_norm = loc_trk["norm_title"]
                 if loc_norm == norm_title or (len(norm_title) > 4 and norm_title in loc_norm) or (len(loc_norm) > 4 and loc_norm in norm_title):
@@ -590,9 +621,10 @@ class CDMixtapePlanner:
         for loc_trk in local_seed_tracks:
             trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
             if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys and len(matched_seed_tracks) < seed_track_count:
-                matched_seed_tracks.append((loc_trk, 50, "seed"))
-                used_file_paths.add(loc_trk["file_path"])
-                used_track_keys.add(trk_key)
+                if is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s + 60):
+                    matched_seed_tracks.append((loc_trk, 50, "seed"))
+                    used_file_paths.add(loc_trk["file_path"])
+                    used_track_keys.add(trk_key)
 
         matched_seed_tracks = matched_seed_tracks[:seed_track_count]
 
@@ -622,9 +654,9 @@ class CDMixtapePlanner:
             else:
                 break
 
-        # Phase 2: Collect Vibe Tracks from Related Artists (Max 3 tracks per vibe artist)
+        # Phase 2: Collect Vibe Tracks from Direct Related Artists (Max N tracks per vibe artist, <= max_song_duration_s)
         if progress_callback:
-            progress_callback("Filling remaining capacity with related vibe artists (max 3 per artist)...")
+            progress_callback(f"Filling capacity with related vibe artists (max {max_vibe_tracks_per_artist} per artist, <= {max_song_duration_s//60}:{max_song_duration_s%60:02d})...")
 
         candidate_vibe_tracks: List[Tuple[Dict, int, str, str]] = []
 
@@ -633,24 +665,22 @@ class CDMixtapePlanner:
             rel_name = rel.get("name", "")
             rel_norm = normalize_string(rel_name)
             if rel_norm and rel_norm not in (norm_seed_artist, norm_real_seed):
-                weight = max(25, 95 - idx * 3)
+                weight = max(25, 95 - idx * 2)
                 related_norm_map[rel_norm] = (rel_name, weight)
 
-        # Add candidate vibe tracks (strictly deduplicating duplicates in candidate pool)
         seen_candidate_keys = set()
         for norm_art, loc_tracks in self.library_index.artists_map.items():
             if norm_art in related_norm_map:
                 disp_art, weight = related_norm_map[norm_art]
                 
-                # Sort artist tracks if we have multiple, keeping highest priority
                 unique_artist_tracks = []
                 for loc_trk in loc_tracks:
                     trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
                     if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys and trk_key not in seen_candidate_keys:
-                        seen_candidate_keys.add(trk_key)
-                        unique_artist_tracks.append(loc_trk)
+                        if is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s):
+                            seen_candidate_keys.add(trk_key)
+                            unique_artist_tracks.append(loc_trk)
 
-                # Queue up to max_vibe_tracks_per_artist tracks for this vibe artist
                 for loc_trk in unique_artist_tracks[:max_vibe_tracks_per_artist]:
                     candidate_vibe_tracks.append((loc_trk, weight, "vibe", f"Vibe: {disp_art}"))
 
@@ -683,22 +713,76 @@ class CDMixtapePlanner:
                     "will_transcode": transcode_lossless_to_mp3 and loc_trk["is_lossless"]
                 })
 
-        # Phase 3: Knapsack Gap-Filler (Puzzle-Piece fitting, max 1 filler track per artist)
+        # Phase 2.5: Wide Library Vibe & Variety Expansion
+        # If remaining space is still large (e.g. seed artist had few songs and few direct Spotify related artists were found in folder),
+        # sample 1-2 standard-length songs (<= max_song_duration_s) from all other diverse artists in the library!
         remaining_capacity = target_limit - current_metric_total
         min_slot_size = 500 * 1024 if cap_type == "bytes" else 30
+
+        if remaining_capacity > 10 * 1024 * 1024:  # If more than 10 MB remaining
+            if progress_callback:
+                progress_callback("Expanding vibe selection across diverse library artists...")
+
+            # Collect valid candidate songs from all other library artists
+            expanded_vibe_tracks: List[Tuple[Dict, int, str, str]] = []
+            for norm_art, loc_tracks in self.library_index.artists_map.items():
+                if norm_art == norm_seed_artist or norm_art == norm_real_seed:
+                    continue
+                if vibe_artist_counts.get(norm_art, 0) >= max_vibe_tracks_per_artist:
+                    continue
+
+                for loc_trk in loc_tracks:
+                    trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                    if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys:
+                        if is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s):
+                            disp_art = loc_trk["artist"]
+                            expanded_vibe_tracks.append((loc_trk, 50, "vibe", f"Vibe: {disp_art}"))
+                            break  # Sample 1 track per artist for maximum variety
+
+            for loc_trk, pop_score, role, role_desc in expanded_vibe_tracks:
+                trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                art_key = loc_trk["norm_artist"]
+
+                if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
+                    continue
+
+                if vibe_artist_counts.get(art_key, 0) >= max_vibe_tracks_per_artist:
+                    continue
+
+                m_val, est_b = get_track_metric(loc_trk)
+                if current_metric_total + m_val <= target_limit:
+                    current_metric_total += m_val
+                    current_bytes_total += est_b
+                    used_file_paths.add(loc_trk["file_path"])
+                    used_track_keys.add(trk_key)
+                    vibe_artist_counts[art_key] = vibe_artist_counts.get(art_key, 0) + 1
+                    selected_tracks.append({
+                        **loc_trk,
+                        "effective_bytes": est_b,
+                        "popularity": pop_score,
+                        "role": role,
+                        "role_desc": role_desc,
+                        "will_transcode": transcode_lossless_to_mp3 and loc_trk["is_lossless"]
+                    })
+                else:
+                    break
+
+        # Phase 3: Knapsack Micro-Gap Filler (Snug fit for remaining <15MB with standard singles <= max_song_duration_s)
+        remaining_capacity = target_limit - current_metric_total
         
         if remaining_capacity > min_slot_size:
             if progress_callback:
-                progress_callback("Maximizing disc utilization (fitting gap pieces)...")
+                progress_callback("Maximizing disc capacity (final micro-gap fitting)...")
 
-            # Collect remaining unique library tracks
+            # Collect remaining unique standard songs
             remaining_library_tracks = []
             seen_rem_keys = set()
             for t in self.library_index.tracks:
                 trk_key = canonical_track_key(t["artist"], t["title"])
                 if t["file_path"] not in used_file_paths and trk_key not in used_track_keys and trk_key not in seen_rem_keys:
-                    seen_rem_keys.add(trk_key)
-                    remaining_library_tracks.append(t)
+                    if is_valid_mixtape_track(t, max_dur_s=max_song_duration_s):
+                        seen_rem_keys.add(trk_key)
+                        remaining_library_tracks.append(t)
 
             filler_artist_counts: Dict[str, int] = {}
 
@@ -710,7 +794,6 @@ class CDMixtapePlanner:
 
                 for candidate in remaining_library_tracks:
                     c_art = candidate["norm_artist"]
-                    # Limit filler tracks per artist to max 1 for maximum diversity
                     if filler_artist_counts.get(c_art, 0) >= 1 or vibe_artist_counts.get(c_art, 0) >= max_vibe_tracks_per_artist:
                         continue
 
@@ -795,7 +878,7 @@ class CDMixtapePlanner:
 class CDMixtapeExporter:
     """
     Safely copies/transcodes selected mixtape tracks into a dedicated CD burn directory
-    and generates an M3U playlist file for CD burning software.
+    and generates an M3U playlist file + printable CD jewel case insert.
     """
 
     def __init__(self, ffmpeg_path: str = "ffmpeg.exe"):
@@ -821,8 +904,8 @@ class CDMixtapeExporter:
         if not tracks:
             raise ValueError("No tracks in mixtape plan to export.")
 
+        seed_name = mixtape_plan.get("seed_artist", {}).get("name") or "Mixtape"
         if not folder_name:
-            seed_name = mixtape_plan.get("seed_artist", {}).get("name") or "Mixtape"
             clean_seed = sanitize_filename(seed_name, 30)
             folder_name = f"CD_Burn_{clean_seed}_Mixtape"
 
@@ -864,8 +947,6 @@ class CDMixtapeExporter:
                         "-vn",
                         "-c:a", "libmp3lame",
                         "-b:a", f"{mp3_bitrate_kbps}k",
-                        "-map_metadata", "0",
-                        "-id3v2_version", "3",
                         dst_file
                     ]
                     
@@ -904,12 +985,105 @@ class CDMixtapeExporter:
             except Exception as e:
                 errors.append(f"Error copying '{src_file}': {e}")
 
+        # 1. Write M3U Playlist
         playlist_path = os.path.join(target_folder, "000_Mixtape_Burn_Playlist.m3u")
         try:
             with open(playlist_path, "w", encoding="utf-8") as f:
                 f.writelines(m3u_lines)
         except Exception as e:
             print(f"[CDMixtapeExporter] Failed writing playlist: {e}")
+
+        # 2. Write Printable Jewel Case Insert (HTML / CSS print-ready)
+        summary = mixtape_plan.get("summary", {})
+        dur_str = summary.get("duration_str", "")
+        total_mb = summary.get("total_mb", 0.0)
+        
+        insert_html_path = os.path.join(target_folder, "CD_Jewel_Case_Insert.html")
+        try:
+            rows_html = ""
+            for t in tracks:
+                d_sec = t.get("duration_s", 0)
+                m, s = int(d_sec // 60), int(d_sec % 60)
+                rows_html += f"""
+                <tr>
+                    <td class="num">{t['track_number']:02d}</td>
+                    <td class="artist">{html.escape(t['artist'])}</td>
+                    <td class="title">{html.escape(t['title'])}</td>
+                    <td class="time">{m}:{s:02d}</td>
+                </tr>
+                """
+
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{html.escape(seed_name)} - CD Mixtape Jewel Case Insert</title>
+<style>
+  @page {{ size: letter; margin: 0.5in; }}
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }}
+  .case-insert {{
+    width: 4.75in;
+    min-height: 4.75in;
+    border: 2px dashed #00E5FF;
+    padding: 16px;
+    background: #090e17;
+    box-sizing: border-box;
+    margin: 0 auto;
+    page-break-inside: avoid;
+  }}
+  .header {{ border-bottom: 2px solid #00E5FF; padding-bottom: 8px; margin-bottom: 10px; }}
+  .title-main {{ font-size: 16pt; font-weight: bold; color: #00E5FF; margin: 0; }}
+  .subtitle {{ font-size: 9pt; color: #94A3B8; margin-top: 2px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 7.5pt; }}
+  th {{ text-align: left; color: #38BDF8; border-bottom: 1px solid #1E293B; padding: 2px 4px; }}
+  td {{ padding: 2px 4px; border-bottom: 1px dotted #1E293B; }}
+  .num {{ font-weight: bold; color: #00E5FF; width: 18px; }}
+  .artist {{ font-weight: 600; color: #F1F5F9; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .title {{ color: #CBD5E1; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .time {{ text-align: right; color: #94A3B8; width: 32px; font-family: monospace; }}
+  .footer {{ margin-top: 10px; padding-top: 6px; border-top: 1px solid #1E293B; font-size: 7.5pt; color: #64748B; display: flex; justify-content: space-between; }}
+  @media print {{
+    body {{ background: white; color: black; padding: 0; }}
+    .case-insert {{ background: white; border: 1px dashed #666; color: black; }}
+    .title-main {{ color: black; }}
+    th {{ color: black; border-bottom: 1px solid black; }}
+    td {{ border-bottom: 1px dotted #ccc; }}
+    .artist, .title, .num, .time {{ color: black; }}
+    .footer {{ color: #444; border-top: 1px solid black; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="case-insert">
+    <div class="header">
+      <div class="title-main">{html.escape(seed_name)} &amp; VIBES</div>
+      <div class="subtitle">Custom CD Mixtape &bull; {len(tracks)} Tracks &bull; {dur_str} &bull; {total_mb:.1f} MB</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Artist</th>
+          <th>Title</th>
+          <th style="text-align:right">Dur</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+    <div class="footer">
+      <span>Generated with Shallot Media Archive</span>
+      <span>Total: {len(tracks)} Tracks ({dur_str})</span>
+    </div>
+  </div>
+</body>
+</html>
+"""
+            with open(insert_html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+        except Exception as e:
+            print(f"[CDMixtapeExporter] Failed writing HTML insert: {e}")
 
         was_cancelled = self._cancel_event.is_set()
 
@@ -920,5 +1094,6 @@ class CDMixtapeExporter:
             "transcoded_count": transcoded_count,
             "errors": errors,
             "playlist_path": playlist_path,
+            "insert_path": insert_html_path,
             "cancelled": was_cancelled
         }

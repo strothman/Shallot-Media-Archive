@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- expand vibe artist pool when seed artist has fewer songs than cap (680f834)
+
+### Added
 - limit vibe artists to max 3 tracks for high CD diversity (ea74577)
 
 ### Fixed

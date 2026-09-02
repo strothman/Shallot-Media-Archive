@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- enforce strict duplicate immunity in CD mixtape planner (514c587)
+
+### Fixed
 - import typing definitions in app.py for clean silent startup (5d3de51)
 
 ### Added

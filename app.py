@@ -2140,17 +2140,18 @@ class DownloaderApp(ctk.CTk):
         # Col 1: Seed Track Count
         f_seed_cnt = ctk.CTkFrame(cd_grid, fg_color="transparent")
         f_seed_cnt.grid(row=0, column=1, sticky="ew", padx=(0, 6))
-        lbl_scnt = ctk.CTkLabel(f_seed_cnt, text="Seed Artist Hits", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_scnt = ctk.CTkLabel(f_seed_cnt, text="Seed Artist Hits (Max)", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_scnt.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_scnt)
         self.cd_seed_count_menu = ctk.CTkOptionMenu(
             f_seed_cnt,
             values=[
-                "Top 20 Songs (Default)",
-                "Top 15 Songs",
-                "Top 10 Songs",
-                "Top 25 Songs",
-                "Top 30 Songs"
+                "Top 20 Hits (Max)",
+                "Top 15 Hits (Max)",
+                "Top 10 Hits (Max)",
+                "Top 25 Hits (Max)",
+                "Top 30 Hits (Max)",
+                "All Available Hits"
             ],
             height=28,
             font=("Segoe UI", 10)

@@ -238,9 +238,9 @@ class SpotifyRecommender:
 
         # Fallback: Last.fm Similar Artists API
         target_name = artist_name or artist_id
-        return self.get_lastfm_similar_artists(target_name, limit=25)
+        return self.get_lastfm_similar_artists(target_name, limit=50)
 
-    def get_lastfm_similar_artists(self, artist_name: str, limit: int = 25) -> List[Dict]:
+    def get_lastfm_similar_artists(self, artist_name: str, limit: int = 50) -> List[Dict]:
         """Fetches similar vibe artists via Last.fm API."""
         try:
             q = urllib.parse.quote(artist_name.strip())

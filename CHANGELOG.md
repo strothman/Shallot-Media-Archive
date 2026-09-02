@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- clean callback structure in start_cd_export (a6283bd)
+
 ### Added
 - full library squeeze mode with 256k/192k/160k/128k compression for max CD capacity (66ee147)
 

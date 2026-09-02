@@ -2114,7 +2114,8 @@ class DownloaderApp(ctk.CTk):
         cd_grid.columnconfigure(0, weight=2)
         cd_grid.columnconfigure(1, weight=2)
         cd_grid.columnconfigure(2, weight=2)
-        cd_grid.columnconfigure(3, weight=3)
+        cd_grid.columnconfigure(3, weight=2)
+        cd_grid.columnconfigure(4, weight=3)
 
         # Col 0: Disc Preset
         f_cap = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -2159,9 +2160,31 @@ class DownloaderApp(ctk.CTk):
         self.cd_seed_count_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_seed_count_menu)
 
-        # Col 2: Transcode / Bitrate
+        # Col 2: Max Tracks Per Vibe Artist
+        f_vibe_max = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_vibe_max.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+        lbl_vmax = ctk.CTkLabel(f_vibe_max, text="Max Per Vibe Artist", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_vmax.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_vmax)
+        self.cd_max_vibe_menu = ctk.CTkOptionMenu(
+            f_vibe_max,
+            values=[
+                "3 Tracks (Default)",
+                "1 Track (Max Variety)",
+                "2 Tracks",
+                "4 Tracks",
+                "5 Tracks",
+                "No Limit"
+            ],
+            height=28,
+            font=("Segoe UI", 10)
+        )
+        self.cd_max_vibe_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_max_vibe_menu)
+
+        # Col 3: Transcode / Bitrate
         f_trans = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_trans.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+        f_trans.grid(row=0, column=3, sticky="ew", padx=(0, 6))
         lbl_trans = ctk.CTkLabel(f_trans, text="Transcode MP3 Bitrate", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_trans.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_trans)
@@ -2174,13 +2197,13 @@ class DownloaderApp(ctk.CTk):
         self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_bitrate_menu)
 
-        # Col 3: Transcode switch & Generate button
+        # Col 4: Transcode switch & Generate button
         f_action_top = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_action_top.grid(row=0, column=3, sticky="ew")
+        f_action_top.grid(row=0, column=4, sticky="ew")
         
         self.cd_transcode_switch = ctk.CTkSwitch(
             f_action_top,
-            text="Squeeze/Transcode FLAC to MP3",
+            text="Squeeze/Transcode FLAC",
             font=("Segoe UI", 9),
             height=16
         )
@@ -5628,6 +5651,14 @@ class DownloaderApp(ctk.CTk):
                 preset_key = k
                 break
 
+        # Parse max vibe tracks per artist
+        raw_max_vibe = self.cd_max_vibe_menu.get()
+        if "no limit" in raw_max_vibe.lower() or "unlimited" in raw_max_vibe.lower():
+            max_vibe_cnt = 999
+        else:
+            m_vibe = re.search(r'\d+', raw_max_vibe)
+            max_vibe_cnt = int(m_vibe.group()) if m_vibe else 3
+
         # Parse transcode & bitrate
         transcode_lossless = bool(self.cd_transcode_switch.get())
         raw_br = self.cd_bitrate_menu.get()
@@ -5660,6 +5691,7 @@ class DownloaderApp(ctk.CTk):
                     preset_key=preset_key,
                     transcode_lossless_to_mp3=transcode_lossless,
                     target_mp3_kbps=bitrate_kbps,
+                    max_vibe_tracks_per_artist=max_vibe_cnt,
                     progress_callback=lambda msg: self.after(0, lambda m=msg: self.cd_export_status_lbl.configure(text=m, text_color="#38BDF8"))
                 )
                 self.cd_mixtape_plan = plan

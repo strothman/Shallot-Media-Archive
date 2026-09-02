@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from typing import Dict, List, Optional, Tuple, Callable, Any
 
 # Ensure Windows Taskbar displays the dedicated app icon instead of generic python icon
 if sys.platform.startswith("win"):

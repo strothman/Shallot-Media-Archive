@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- limit vibe artists to max 3 tracks for high CD diversity (ea74577)
+
 ### Fixed
 - enforce strict duplicate immunity in CD mixtape planner (514c587)
 

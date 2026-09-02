@@ -2040,13 +2040,16 @@ class DownloaderApp(ctk.CTk):
         cd_seed_left = ctk.CTkFrame(cd_seed_row, fg_color="transparent")
         cd_seed_left.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        lbl_cd_seed = ctk.CTkLabel(cd_seed_left, text="SEED ARTIST (TYPE OR SELECT FROM LIBRARY)", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_cd_seed = ctk.CTkLabel(cd_seed_left, text="SEED ARTIST (OR SELECT FULL LIBRARY CHAOS)", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_cd_seed.pack(anchor="w", pady=(0, 1))
         self.theme_labels_secondary.append(lbl_cd_seed)
 
+        cd_seed_input_box = ctk.CTkFrame(cd_seed_left, fg_color="transparent")
+        cd_seed_input_box.pack(fill="x")
+
         self.cd_seed_artist_cb = ctk.CTkComboBox(
-            cd_seed_left,
-            values=["Glass Animals", "Select or Type Artist..."],
+            cd_seed_input_box,
+            values=["🎲 Full Library Chaos (Random Gamble)", "Glass Animals", "Select or Type Artist..."],
             height=30,
             font=("Segoe UI", 11),
             fg_color="#070F15",
@@ -2054,9 +2057,20 @@ class DownloaderApp(ctk.CTk):
             text_color="#F5F5F7",
             dropdown_fg_color="#151B26"
         )
-        self.cd_seed_artist_cb.set("Glass Animals")
-        self.cd_seed_artist_cb.pack(fill="x")
+        self.cd_seed_artist_cb.set("🎲 Full Library Chaos (Random Gamble)")
+        self.cd_seed_artist_cb.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.theme_option_menus.append(self.cd_seed_artist_cb)
+
+        self.btn_cd_roll_artist = ctk.CTkButton(
+            cd_seed_input_box,
+            text="🎲 Roll Artist",
+            width=90,
+            height=30,
+            font=("Segoe UI", 10, "bold"),
+            command=self.roll_random_cd_artist
+        )
+        self.btn_cd_roll_artist.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_cd_roll_artist)
 
         cd_seed_right = ctk.CTkFrame(cd_seed_row, fg_color="transparent")
         cd_seed_right.pack(side="right", fill="x", expand=True)
@@ -2202,9 +2216,9 @@ class DownloaderApp(ctk.CTk):
         self.cd_max_dur_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_max_dur_menu)
 
-        # Row 1, Col 0 & 1: Compression / Squeeze Mode
+        # Row 1, Col 0: Compression / Squeeze Mode
         f_squeeze = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_squeeze.grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        f_squeeze.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(3, 0))
         lbl_sqz = ctk.CTkLabel(f_squeeze, text="Compression / Squeeze Mode", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_sqz.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_sqz)
@@ -2221,9 +2235,9 @@ class DownloaderApp(ctk.CTk):
         self.cd_squeeze_mode_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_squeeze_mode_menu)
 
-        # Row 1, Col 2: Target MP3 Bitrate
+        # Row 1, Col 1: Target MP3 Bitrate
         f_trans = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_trans.grid(row=1, column=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        f_trans.grid(row=1, column=1, sticky="ew", padx=(0, 6), pady=(3, 0))
         lbl_trans = ctk.CTkLabel(f_trans, text="Target MP3 Bitrate", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_trans.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_trans)
@@ -2241,6 +2255,25 @@ class DownloaderApp(ctk.CTk):
         )
         self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_bitrate_menu)
+
+        # Row 1, Col 2: Track Ordering & Mix Flow
+        f_style = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_style.grid(row=1, column=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        lbl_style = ctk.CTkLabel(f_style, text="Mixtape Flow & Sequencing", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_style.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_style)
+        self.cd_mix_style_menu = ctk.CTkOptionMenu(
+            f_style,
+            values=[
+                "🎲 Chaos Shuffle (Radio Mix)",
+                "🌱 Seed Intro + Shuffled Vibes",
+                "📁 Grouped by Artist & Role"
+            ],
+            height=28,
+            font=("Segoe UI", 10)
+        )
+        self.cd_mix_style_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_mix_style_menu)
 
         # Row 1, Col 3: Generate Button
         f_btn_box = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -5645,6 +5678,17 @@ class DownloaderApp(ctk.CTk):
 
         threading.Thread(target=run_scan, daemon=True).start()
 
+    def roll_random_cd_artist(self):
+        """Picks a random artist from the indexed library for instant chaos/gamble fun."""
+        import random
+        if hasattr(self, 'cd_library_index') and self.cd_library_index and self.cd_library_index.all_artists:
+            rand_art = random.choice(self.cd_library_index.all_artists)
+            self.cd_seed_artist_cb.set(rand_art)
+            self.cd_export_status_lbl.configure(text=f"🎲 Rolled surprise artist: {rand_art}", text_color="#38BDF8")
+        else:
+            self.cd_seed_artist_cb.set("🎲 Full Library Chaos (Random Gamble)")
+            self.cd_export_status_lbl.configure(text="🎲 Set to Full Library Chaos Mode. Click 'Scan Library' to index specific artists.", text_color="#38BDF8")
+
     def _on_cd_library_scanned_success(self, count: int, artists: List[str]):
         self.btn_cd_scan_lib.configure(state="normal", text="⚡ Scan Library")
         artist_cnt = len(artists)
@@ -5653,10 +5697,11 @@ class DownloaderApp(ctk.CTk):
             text_color="#4ADE80"
         )
         if artists:
-            self.cd_seed_artist_cb.configure(values=artists)
+            artist_options = ["🎲 Full Library Chaos (Random Gamble)"] + artists
+            self.cd_seed_artist_cb.configure(values=artist_options)
             curr = self.cd_seed_artist_cb.get().strip()
-            if not curr or curr == "Select or Type Artist...":
-                self.cd_seed_artist_cb.set(artists[0])
+            if not curr or curr == "Select or Type Artist..." or curr == "Glass Animals":
+                self.cd_seed_artist_cb.set("🎲 Full Library Chaos (Random Gamble)")
 
     def _on_cd_library_scanned_error(self, err_msg: str):
         self.btn_cd_scan_lib.configure(state="normal", text="⚡ Scan Library")
@@ -5672,8 +5717,7 @@ class DownloaderApp(ctk.CTk):
             return
 
         if not seed_artist or seed_artist == "Select or Type Artist...":
-            self.cd_export_status_lbl.configure(text="Please choose or type a seed artist.", text_color="#FB7185")
-            return
+            seed_artist = "🎲 Full Library Chaos (Random Gamble)"
 
         # Parse seed count
         raw_seed_cnt = self.cd_seed_count_menu.get()
@@ -5722,9 +5766,18 @@ class DownloaderApp(ctk.CTk):
         m_br = re.search(r'\d+', raw_br)
         bitrate_kbps = int(m_br.group()) if m_br else 256
 
+        # Parse track flow / mix style
+        raw_style = self.cd_mix_style_menu.get().lower() if hasattr(self, 'cd_mix_style_menu') else "chaos"
+        if "grouped" in raw_style or "artist" in raw_style:
+            mix_style = "grouped"
+        elif "seed intro" in raw_style or "intro" in raw_style:
+            mix_style = "seed_intro"
+        else:
+            mix_style = "chaos_shuffle"
+
         self.btn_cd_generate.configure(state="disabled", text="Generating...")
         self.btn_cd_export.configure(state="disabled")
-        self.cd_export_status_lbl.configure(text="Connecting to Spotify & packing local library...", text_color="#38BDF8")
+        self.cd_export_status_lbl.configure(text="🎲 Rolling library & packing optimal mixtape capacity...", text_color="#38BDF8")
 
         def run_generation():
             try:
@@ -5751,6 +5804,7 @@ class DownloaderApp(ctk.CTk):
                     max_vibe_tracks_per_artist=max_vibe_cnt,
                     max_song_duration_s=max_dur_s,
                     squeeze_mode=squeeze_mode,
+                    mix_style=mix_style,
                     progress_callback=lambda msg: self.after(0, lambda m=msg: self.cd_export_status_lbl.configure(text=m, text_color="#38BDF8"))
                 )
                 self.cd_mixtape_plan = plan

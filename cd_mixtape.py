@@ -15,6 +15,8 @@ import ssl
 import shutil
 import base64
 import time
+import random
+import html
 import urllib.request
 import urllib.parse
 import subprocess
@@ -22,7 +24,7 @@ import threading
 from typing import Dict, List, Optional, Tuple, Callable
 
 import mutagen
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TPOS, TDRC
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 
@@ -97,6 +99,117 @@ def sanitize_filename(name: str, max_len: int = 80) -> str:
     sanitized = re.sub(r'[\\/*?:"<>|]', '', name).strip()
     sanitized = re.sub(r'\s+', ' ', sanitized)
     return sanitized[:max_len].strip() or "Track"
+
+
+CLEAN_NOISE_REGEX = re.compile(
+    r'[\(\[\{]\s*(?:official\s*(?:music\s*)?video|official\s*audio|official\s*hd|lyric\s*video|music\s*video|audio\s*only|full\s*audio|visualizer|hd|hq|1080p|4k|remaster(?:ed)?(?:\s*\d{4})?|video|lyrics?|audio|official|original\s*mix)\s*[\)\]\}]',
+    re.IGNORECASE
+)
+
+
+def clean_display_title(raw_title: str) -> str:
+    """
+    Cleans YouTube clutter, bracketed bloat, and track numbering prefixes from song titles
+    so car stereos (e.g. Ford SYNC) display clean, legible song titles immediately.
+    """
+    if not raw_title:
+        return "Unknown Track"
+    t = raw_title.strip()
+    # Remove leading track number patterns like "01. ", "01 - ", "1 "
+    t = re.sub(r'^\d+\s*[-_.]\s*', '', t)
+    # Remove noise patterns: (Official Audio), [1080p], etc.
+    t = CLEAN_NOISE_REGEX.sub('', t)
+    # Remove empty leftover brackets
+    t = re.sub(r'[\(\[\{]\s*[\)\]\}]', '', t)
+    t = re.sub(r'\s+', ' ', t).strip(' -_.,;:')
+    return t or raw_title.strip()
+
+
+def clean_display_artist(raw_artist: str) -> str:
+    """Cleans artist names for clean automotive display."""
+    if not raw_artist:
+        return "Unknown Artist"
+    a = raw_artist.strip()
+    a = CLEAN_NOISE_REGEX.sub('', a)
+    a = re.sub(r'[\(\[\{]\s*[\)\]\}]', '', a)
+    a = re.sub(r'\s+', ' ', a).strip(' -_.,;:')
+    return a or raw_artist.strip()
+
+
+def write_car_optimized_tags(
+    file_path: str,
+    artist: str,
+    title: str,
+    album: str,
+    track_num: int,
+    total_tracks: int
+) -> bool:
+    """
+    Writes clean, automotive-optimized ID3v2.3 (or MP4/FLAC) metadata.
+    100% compatible with Ford SYNC (2016 Ford Fusion) and in-dash CD players:
+    - Sets ID3v2.3 standard (no ID3v2.4 parse failure)
+    - Syncs TRCK frame to match mixtape sequence number (track_num/total_tracks)
+    - Sets cohesive TALB album name so car heads group disc as 1 unified album
+    - Cleans noise and web junk from song titles and artists
+    """
+    if not os.path.exists(file_path):
+        return False
+
+    ext = os.path.splitext(file_path)[1].lower()
+    clean_art = clean_display_artist(artist)
+    clean_tit = clean_display_title(title)
+    clean_alb = album.strip() or "CD Mixtape"
+    trck_str = f"{track_num}/{total_tracks}"
+
+    try:
+        if ext == ".mp3":
+            try:
+                tags = ID3(file_path)
+            except Exception:
+                tags = ID3()
+
+            tags["TIT2"] = TIT2(encoding=3, text=clean_tit)
+            tags["TPE1"] = TPE1(encoding=3, text=clean_art)
+            tags["TALB"] = TALB(encoding=3, text=clean_alb)
+            tags["TRCK"] = TRCK(encoding=3, text=trck_str)
+            tags["TPOS"] = TPOS(encoding=3, text="1/1")
+            
+            # Save strictly as ID3v2.3 for car stereo compatibility
+            tags.save(file_path, v2_version=3)
+            return True
+
+        elif ext in (".m4a", ".mp4", ".aac", ".alac"):
+            try:
+                mp4 = MP4(file_path)
+                mp4["\xa9nam"] = [clean_tit]
+                mp4["\xa9ART"] = [clean_art]
+                mp4["\xa9alb"] = [clean_alb]
+                mp4["trkn"] = [(track_num, total_tracks)]
+                mp4["disk"] = [(1, 1)]
+                mp4.save()
+                return True
+            except Exception:
+                pass
+
+        elif ext == ".flac":
+            try:
+                flac = FLAC(file_path)
+                flac["title"] = clean_tit
+                flac["artist"] = clean_art
+                flac["album"] = clean_alb
+                flac["tracknumber"] = str(track_num)
+                flac["totaltracks"] = str(total_tracks)
+                flac["discnumber"] = "1"
+                flac["totaldiscs"] = "1"
+                flac.save()
+                return True
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"[CDMixtapeExporter] Tagging error for '{file_path}': {e}")
+
+    return False
 
 
 class SpotifyRecommender:
@@ -544,11 +657,13 @@ class CDMixtapePlanner:
         max_vibe_tracks_per_artist: int = 3,
         max_song_duration_s: int = 270,
         squeeze_mode: str = "all",
+        mix_style: str = "chaos_shuffle",
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict:
         """
         Plans the full mixtape to fill capacity cleanly with ZERO duplicates,
-        strict max song length (<= 4:30), and selectable compression/squeeze mode.
+        strict max song length (<= 4:30), selectable compression, and true
+        library-wide randomized artist/song selection (no alphabetical bias).
         """
         if not transcode_lossless_to_mp3:
             squeeze_mode = "none"
@@ -563,24 +678,23 @@ class CDMixtapePlanner:
             target_limit = preset["target_value"]
             display_limit = preset["display_limit"]
 
-        if progress_callback:
-            progress_callback(f"Finding top Spotify hits for '{seed_artist_name}'...")
+        # Check for full library chaos / gamble mode
+        clean_seed_input = seed_artist_name.strip()
+        is_chaos_seed = (
+            not clean_seed_input or
+            "chaos" in clean_seed_input.lower() or
+            "gamble" in clean_seed_input.lower() or
+            "random" in clean_seed_input.lower()
+        )
 
-        # 1. Look up Seed Artist
-        seed_artist_info = self.recommender.search_artist(seed_artist_name)
-        seed_artist_id = seed_artist_info.get("id", "")
-        real_seed_name = seed_artist_info.get("name", seed_artist_name)
+        selected_tracks: List[Dict] = []
+        used_file_paths = set()
+        used_track_keys = set()
+        vibe_artist_counts: Dict[str, int] = {}
+        current_metric_total = 0
+        current_bytes_total = 0
 
-        # 2. Get Seed Artist Top Tracks
-        spotify_seed_tracks = self.recommender.get_artist_top_tracks(seed_artist_id, real_seed_name)
-
-        # 3. Get Related Vibe Artists
-        if progress_callback:
-            progress_callback(f"Discovering vibe & related artists for '{real_seed_name}'...")
-
-        related_artists = self.recommender.get_related_artists(seed_artist_id, real_seed_name)
-
-        # 4. Helper to calculate effective track size / duration
+        # Helper to calculate effective track size / duration
         def get_track_metric(local_trk: Dict) -> Tuple[int, int, bool]:
             orig_bytes = local_trk["size_bytes"]
             dur_s = local_trk["duration_s"] or 210
@@ -598,102 +712,130 @@ class CDMixtapePlanner:
 
             return metric, est_bytes, will_trans
 
-        # 5. Build candidate pools from local library
-        if progress_callback:
-            progress_callback("Matching local music files with Spotify vibe...")
+        if is_chaos_seed:
+            if progress_callback:
+                progress_callback("🎲 Rolling library-wide Chaos Gamble mix...")
+            seed_artist_info = {
+                "id": "",
+                "name": "🎲 Full Library Chaos",
+                "genres": ["Chaos", "Shuffle", "Eclectic Variety"],
+                "popularity": 99
+            }
+            related_artists = []
+            norm_seed_artist = ""
+            norm_real_seed = ""
+        else:
+            if progress_callback:
+                progress_callback(f"Finding top Spotify hits for '{clean_seed_input}'...")
 
-        norm_seed_artist = normalize_string(seed_artist_name)
-        norm_real_seed = normalize_string(real_seed_name)
-        
-        local_seed_tracks = (
-            self.library_index.artists_map.get(norm_seed_artist, []) or
-            self.library_index.artists_map.get(norm_real_seed, [])
-        )
+            # 1. Look up Seed Artist
+            seed_artist_info = self.recommender.search_artist(clean_seed_input)
+            seed_artist_id = seed_artist_info.get("id", "")
+            real_seed_name = seed_artist_info.get("name", clean_seed_input)
 
-        selected_tracks: List[Dict] = []
-        used_file_paths = set()
-        used_track_keys = set()
-        vibe_artist_counts: Dict[str, int] = {}
-        current_metric_total = 0
-        current_bytes_total = 0
+            # 2. Get Seed Artist Top Tracks
+            spotify_seed_tracks = self.recommender.get_artist_top_tracks(seed_artist_id, real_seed_name)
 
-        # Phase 1: Match Seed Artist Top Tracks
-        matched_seed_tracks = []
-        for s_trk in spotify_seed_tracks:
-            norm_title = normalize_string(s_trk["title"])
-            best_match = None
-            for loc_trk in local_seed_tracks:
+            # 3. Get Related Vibe Artists
+            if progress_callback:
+                progress_callback(f"Discovering vibe & related artists for '{real_seed_name}'...")
+
+            related_artists = self.recommender.get_related_artists(seed_artist_id, real_seed_name)
+
+            norm_seed_artist = normalize_string(clean_seed_input)
+            norm_real_seed = normalize_string(real_seed_name)
+            
+            local_seed_tracks = (
+                self.library_index.artists_map.get(norm_seed_artist, []) or
+                self.library_index.artists_map.get(norm_real_seed, [])
+            )
+
+            # Phase 1: Match Seed Artist Top Tracks
+            matched_seed_tracks = []
+            for s_trk in spotify_seed_tracks:
+                norm_title = normalize_string(s_trk["title"])
+                best_match = None
+                for loc_trk in local_seed_tracks:
+                    trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                    if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
+                        continue
+                    if not is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s + 60):
+                        continue
+                    loc_norm = loc_trk["norm_title"]
+                    if loc_norm == norm_title or (len(norm_title) > 4 and norm_title in loc_norm) or (len(loc_norm) > 4 and loc_norm in norm_title):
+                        best_match = loc_trk
+                        break
+
+                if best_match:
+                    trk_key = canonical_track_key(best_match["artist"], best_match["title"])
+                    matched_seed_tracks.append((best_match, s_trk.get("popularity", 80), "seed"))
+                    used_file_paths.add(best_match["file_path"])
+                    used_track_keys.add(trk_key)
+
+            # If library has remaining seed tracks not in the Spotify list, randomly pick them up to seed_track_count
+            remaining_seed_tracks = [
+                loc_trk for loc_trk in local_seed_tracks
+                if loc_trk["file_path"] not in used_file_paths and
+                canonical_track_key(loc_trk["artist"], loc_trk["title"]) not in used_track_keys and
+                is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s + 60)
+            ]
+            random.shuffle(remaining_seed_tracks)
+
+            for loc_trk in remaining_seed_tracks:
+                if len(matched_seed_tracks) >= seed_track_count:
+                    break
+                trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                matched_seed_tracks.append((loc_trk, 50, "seed"))
+                used_file_paths.add(loc_trk["file_path"])
+                used_track_keys.add(trk_key)
+
+            matched_seed_tracks = matched_seed_tracks[:seed_track_count]
+
+            # Reset used sets before staging into selected_tracks
+            used_file_paths.clear()
+            used_track_keys.clear()
+
+            for loc_trk, pop_score, role in matched_seed_tracks:
                 trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
                 if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
                     continue
-                if not is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s + 60):
-                    continue
-                loc_norm = loc_trk["norm_title"]
-                if loc_norm == norm_title or (len(norm_title) > 4 and norm_title in loc_norm) or (len(loc_norm) > 4 and loc_norm in norm_title):
-                    best_match = loc_trk
-                    break
 
-            if best_match:
-                trk_key = canonical_track_key(best_match["artist"], best_match["title"])
-                matched_seed_tracks.append((best_match, s_trk.get("popularity", 80), "seed"))
-                used_file_paths.add(best_match["file_path"])
-                used_track_keys.add(trk_key)
-
-        # If library has remaining seed tracks not in the Spotify list, add them up to seed_track_count
-        for loc_trk in local_seed_tracks:
-            trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
-            if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys and len(matched_seed_tracks) < seed_track_count:
-                if is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s + 60):
-                    matched_seed_tracks.append((loc_trk, 50, "seed"))
+                m_val, est_b, will_tr = get_track_metric(loc_trk)
+                if current_metric_total + m_val <= target_limit:
+                    current_metric_total += m_val
+                    current_bytes_total += est_b
                     used_file_paths.add(loc_trk["file_path"])
                     used_track_keys.add(trk_key)
+                    selected_tracks.append({
+                        **loc_trk,
+                        "effective_bytes": est_b,
+                        "popularity": pop_score,
+                        "role": role,
+                        "role_desc": f"Seed: {loc_trk['artist']}",
+                        "will_transcode": will_tr
+                    })
+                else:
+                    break
 
-        matched_seed_tracks = matched_seed_tracks[:seed_track_count]
+            # Phase 2: Collect Vibe Tracks from Direct Related Artists
+            if progress_callback:
+                progress_callback(f"Filling capacity with related vibe artists (max {max_vibe_tracks_per_artist} per artist)...")
 
-        # Reset used sets before staging into selected_tracks
-        used_file_paths.clear()
-        used_track_keys.clear()
+            candidate_vibe_tracks: List[Tuple[Dict, int, str, str]] = []
 
-        for loc_trk, pop_score, role in matched_seed_tracks:
-            trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
-            if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
-                continue
+            related_norm_map = {}
+            for idx, rel in enumerate(related_artists):
+                rel_name = rel.get("name", "")
+                rel_norm = normalize_string(rel_name)
+                if rel_norm and rel_norm not in (norm_seed_artist, norm_real_seed):
+                    weight = max(25, 95 - idx * 2)
+                    related_norm_map[rel_norm] = (rel_name, weight)
 
-            m_val, est_b, will_tr = get_track_metric(loc_trk)
-            if current_metric_total + m_val <= target_limit:
-                current_metric_total += m_val
-                current_bytes_total += est_b
-                used_file_paths.add(loc_trk["file_path"])
-                used_track_keys.add(trk_key)
-                selected_tracks.append({
-                    **loc_trk,
-                    "effective_bytes": est_b,
-                    "popularity": pop_score,
-                    "role": role,
-                    "role_desc": f"Seed: {loc_trk['artist']}",
-                    "will_transcode": will_tr
-                })
-            else:
-                break
-
-        # Phase 2: Collect Vibe Tracks from Direct Related Artists (Max N tracks per vibe artist, <= max_song_duration_s)
-        if progress_callback:
-            progress_callback(f"Filling capacity with related vibe artists (max {max_vibe_tracks_per_artist} per artist, <= {max_song_duration_s//60}:{max_song_duration_s%60:02d})...")
-
-        candidate_vibe_tracks: List[Tuple[Dict, int, str, str]] = []
-
-        related_norm_map = {}
-        for idx, rel in enumerate(related_artists):
-            rel_name = rel.get("name", "")
-            rel_norm = normalize_string(rel_name)
-            if rel_norm and rel_norm not in (norm_seed_artist, norm_real_seed):
-                weight = max(25, 95 - idx * 2)
-                related_norm_map[rel_norm] = (rel_name, weight)
-
-        seen_candidate_keys = set()
-        for norm_art, loc_tracks in self.library_index.artists_map.items():
-            if norm_art in related_norm_map:
-                disp_art, weight = related_norm_map[norm_art]
+            seen_candidate_keys = set()
+            for norm_art, (disp_art, weight) in related_norm_map.items():
+                loc_tracks = self.library_index.artists_map.get(norm_art, [])
+                if not loc_tracks:
+                    continue
                 
                 unique_artist_tracks = []
                 for loc_trk in loc_tracks:
@@ -703,63 +845,82 @@ class CDMixtapePlanner:
                             seen_candidate_keys.add(trk_key)
                             unique_artist_tracks.append(loc_trk)
 
+                # Randomize which tracks are sampled from this vibe artist so it's not always alphabetical
+                random.shuffle(unique_artist_tracks)
+
                 for loc_trk in unique_artist_tracks[:max_vibe_tracks_per_artist]:
                     candidate_vibe_tracks.append((loc_trk, weight, "vibe", f"Vibe: {disp_art}"))
 
-        # Sort candidate vibe tracks by similarity weight descending
-        candidate_vibe_tracks.sort(key=lambda x: x[1], reverse=True)
+            # Sort candidate vibe tracks by similarity weight descending, with slight shuffle for equal weights
+            candidate_vibe_tracks.sort(key=lambda x: x[1] + random.uniform(0, 0.5), reverse=True)
 
-        for loc_trk, pop_score, role, role_desc in candidate_vibe_tracks:
-            trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
-            art_key = loc_trk["norm_artist"]
+            for loc_trk, pop_score, role, role_desc in candidate_vibe_tracks:
+                trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                art_key = loc_trk["norm_artist"]
 
-            if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
-                continue
+                if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
+                    continue
 
-            if vibe_artist_counts.get(art_key, 0) >= max_vibe_tracks_per_artist:
-                continue
+                if vibe_artist_counts.get(art_key, 0) >= max_vibe_tracks_per_artist:
+                    continue
 
-            m_val, est_b, will_tr = get_track_metric(loc_trk)
-            if current_metric_total + m_val <= target_limit:
-                current_metric_total += m_val
-                current_bytes_total += est_b
-                used_file_paths.add(loc_trk["file_path"])
-                used_track_keys.add(trk_key)
-                vibe_artist_counts[art_key] = vibe_artist_counts.get(art_key, 0) + 1
-                selected_tracks.append({
-                    **loc_trk,
-                    "effective_bytes": est_b,
-                    "popularity": pop_score,
-                    "role": role,
-                    "role_desc": role_desc,
-                    "will_transcode": will_tr
-                })
+                m_val, est_b, will_tr = get_track_metric(loc_trk)
+                if current_metric_total + m_val <= target_limit:
+                    current_metric_total += m_val
+                    current_bytes_total += est_b
+                    used_file_paths.add(loc_trk["file_path"])
+                    used_track_keys.add(trk_key)
+                    vibe_artist_counts[art_key] = vibe_artist_counts.get(art_key, 0) + 1
+                    selected_tracks.append({
+                        **loc_trk,
+                        "effective_bytes": est_b,
+                        "popularity": pop_score,
+                        "role": role,
+                        "role_desc": role_desc,
+                        "will_transcode": will_tr
+                    })
 
-        # Phase 2.5: Wide Library Vibe & Variety Expansion
-        # If remaining space is still large (e.g. seed artist had few songs and few direct Spotify related artists were found in folder),
-        # sample 1-2 standard-length songs (<= max_song_duration_s) from all other diverse artists in the library!
+        # Phase 2.5: Wide Library Vibe & Diversity Expansion (True A-Z Random Sampling)
         remaining_capacity = target_limit - current_metric_total
         min_slot_size = 500 * 1024 if cap_type == "bytes" else 30
 
-        if remaining_capacity > 10 * 1024 * 1024:  # If more than 10 MB remaining
+        if remaining_capacity > 5 * 1024 * 1024:  # If more than 5 MB remaining
             if progress_callback:
-                progress_callback("Expanding vibe selection across diverse library artists...")
+                progress_callback("🎲 Randomly sampling artists across entire library (A-Z chaos)...")
 
-            # Collect valid candidate songs from all other library artists
+            # Gather all library artists and randomly shuffle them to eliminate A-Z scanning bias
+            all_norm_artists = list(self.library_index.artists_map.keys())
+            random.shuffle(all_norm_artists)
+
             expanded_vibe_tracks: List[Tuple[Dict, int, str, str]] = []
-            for norm_art, loc_tracks in self.library_index.artists_map.items():
-                if norm_art == norm_seed_artist or norm_art == norm_real_seed:
+            
+            # Target 1-2 tracks per artist for maximum library-wide chaos & variety
+            per_artist_limit = 1 if is_chaos_seed else min(2, max_vibe_tracks_per_artist)
+
+            for norm_art in all_norm_artists:
+                if not is_chaos_seed and (norm_art == norm_seed_artist or norm_art == norm_real_seed):
                     continue
                 if vibe_artist_counts.get(norm_art, 0) >= max_vibe_tracks_per_artist:
                     continue
 
+                loc_tracks = list(self.library_index.artists_map.get(norm_art, []))
+                # Shuffle tracks within artist so it doesn't always pick track 1 or alphabetical A
+                random.shuffle(loc_tracks)
+
+                artist_added = 0
                 for loc_trk in loc_tracks:
                     trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
                     if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys:
                         if is_valid_mixtape_track(loc_trk, max_dur_s=max_song_duration_s):
                             disp_art = loc_trk["artist"]
-                            expanded_vibe_tracks.append((loc_trk, 50, "vibe", f"Vibe: {disp_art}"))
-                            break  # Sample 1 track per artist for maximum variety
+                            role_label = "Chaos" if is_chaos_seed else "Vibe"
+                            expanded_vibe_tracks.append((loc_trk, 50, "vibe", f"{role_label}: {disp_art}"))
+                            artist_added += 1
+                            if artist_added >= per_artist_limit:
+                                break
+
+            # Shuffle all expanded candidates across artists
+            random.shuffle(expanded_vibe_tracks)
 
             for loc_trk, pop_score, role, role_desc in expanded_vibe_tracks:
                 trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
@@ -789,14 +950,14 @@ class CDMixtapePlanner:
                 else:
                     break
 
-        # Phase 3: Knapsack Micro-Gap Filler (Snug fit for remaining <15MB with standard singles <= max_song_duration_s)
+        # Phase 3: Knapsack Micro-Gap Filler (Shuffled pool to avoid alphabetical A-bias)
         remaining_capacity = target_limit - current_metric_total
         
         if remaining_capacity > min_slot_size:
             if progress_callback:
                 progress_callback("Maximizing disc capacity (final micro-gap fitting)...")
 
-            # Collect remaining unique standard songs
+            # Collect remaining unique standard songs and randomize
             remaining_library_tracks = []
             seen_rem_keys = set()
             for t in self.library_index.tracks:
@@ -805,6 +966,9 @@ class CDMixtapePlanner:
                     if is_valid_mixtape_track(t, max_dur_s=max_song_duration_s):
                         seen_rem_keys.add(trk_key)
                         remaining_library_tracks.append(t)
+
+            # Randomize candidate pool so knapsack tests songs across the entire library
+            random.shuffle(remaining_library_tracks)
 
             filler_artist_counts: Dict[str, int] = {}
 
@@ -855,11 +1019,25 @@ class CDMixtapePlanner:
                 else:
                     break
 
-        # Assign sequential track numbers
+        # Apply Mixtape Track Flow & Sequencing
+        if mix_style == "chaos_shuffle":
+            random.shuffle(selected_tracks)
+        elif mix_style == "seed_intro":
+            seed_tracks = [t for t in selected_tracks if t.get("role") == "seed"]
+            if seed_tracks:
+                first_track = random.choice(seed_tracks)
+                other_tracks = [t for t in selected_tracks if t != first_track]
+                random.shuffle(other_tracks)
+                selected_tracks = [first_track] + other_tracks
+            else:
+                random.shuffle(selected_tracks)
+        # if mix_style == "grouped", keep structured Seed -> Vibe -> Filler ordering
+
+        # Assign sequential track numbers with car-optimized clean display names
         for idx, trk in enumerate(selected_tracks, start=1):
             trk["track_number"] = idx
-            clean_art = sanitize_filename(trk["artist"], 40)
-            clean_title = sanitize_filename(trk["title"], 50)
+            clean_art = sanitize_filename(clean_display_artist(trk["artist"]), 40)
+            clean_title = sanitize_filename(clean_display_title(trk["title"]), 50)
             target_ext = ".mp3" if trk["will_transcode"] else trk["ext"]
             trk["target_filename"] = f"{idx:03d} - {clean_art} - {clean_title}{target_ext}"
 
@@ -901,8 +1079,8 @@ class CDMixtapePlanner:
 
 class CDMixtapeExporter:
     """
-    Safely copies/transcodes selected mixtape tracks into a dedicated CD burn directory
-    and generates an M3U playlist file + printable CD jewel case insert.
+    Safely copies/transcodes selected mixtape tracks into a dedicated CD burn directory,
+    optimizes ID3v2.3 tags for car stereos (Ford SYNC), and generates an M3U playlist file + printable CD insert.
     """
 
     def __init__(self, ffmpeg_path: str = "ffmpeg.exe"):
@@ -921,7 +1099,8 @@ class CDMixtapeExporter:
         progress_callback: Optional[Callable[[int, int, str, str], None]] = None
     ) -> Dict:
         """
-        Executes non-destructive file copying and optional transcoding.
+        Executes non-destructive file copying and optional transcoding with 100% automated
+        car stereo ID3v2.3 metadata optimization (Ford SYNC compliant).
         """
         self._cancel_event.clear()
         tracks = mixtape_plan.get("selected_tracks", [])
@@ -929,9 +1108,12 @@ class CDMixtapeExporter:
             raise ValueError("No tracks in mixtape plan to export.")
 
         seed_name = mixtape_plan.get("seed_artist", {}).get("name") or "Mixtape"
+        clean_seed = clean_display_artist(seed_name)
         if not folder_name:
-            clean_seed = sanitize_filename(seed_name, 30)
-            folder_name = f"CD_Burn_{clean_seed}_Mixtape"
+            folder_seed = sanitize_filename(clean_seed, 30)
+            folder_name = f"CD_Burn_{folder_seed}_Mixtape"
+
+        mixtape_album_title = f"{clean_seed} Mixtape" if "chaos" not in clean_seed.lower() else "Library Chaos Mixtape"
 
         target_folder = os.path.join(destination_dir, folder_name)
         os.makedirs(target_folder, exist_ok=True)
@@ -951,7 +1133,9 @@ class CDMixtapeExporter:
             dst_filename = trk["target_filename"]
             dst_file = os.path.join(target_folder, dst_filename)
 
-            disp_title = f"{trk['artist']} - {trk['title']}"
+            clean_art = clean_display_artist(trk.get('artist', ''))
+            clean_tit = clean_display_title(trk.get('title', ''))
+            disp_title = f"{clean_art} - {clean_tit}"
             if progress_callback:
                 progress_callback(idx, total_tracks, disp_title, "Processing...")
 
@@ -962,7 +1146,7 @@ class CDMixtapeExporter:
             try:
                 if trk["will_transcode"]:
                     if progress_callback:
-                        progress_callback(idx, total_tracks, disp_title, f"Transcoding to MP3 ({mp3_bitrate_kbps}k)...")
+                        progress_callback(idx, total_tracks, disp_title, f"Transcoding & optimizing tags ({mp3_bitrate_kbps}k)...")
                     
                     cmd = [
                         self.ffmpeg_path,
@@ -983,27 +1167,43 @@ class CDMixtapeExporter:
                     
                     if res.returncode == 0 and os.path.exists(dst_file):
                         transcoded_count += 1
-                        try:
-                            audio = ID3(dst_file)
-                        except Exception:
-                            audio = ID3()
-                        audio["TIT2"] = TIT2(encoding=3, text=trk["title"])
-                        audio["TPE1"] = TPE1(encoding=3, text=trk["artist"])
-                        if trk.get("album"):
-                            audio["TALB"] = TALB(encoding=3, text=trk["album"])
-                        audio["TRCK"] = TRCK(encoding=3, text=str(idx))
-                        audio.save(dst_file, v2_version=3)
+                        # Automatically write car-optimized ID3v2.3 tags
+                        write_car_optimized_tags(
+                            file_path=dst_file,
+                            artist=clean_art,
+                            title=clean_tit,
+                            album=mixtape_album_title,
+                            track_num=idx,
+                            total_tracks=total_tracks
+                        )
                     else:
                         shutil.copy2(src_file, dst_file)
                         copied_count += 1
+                        write_car_optimized_tags(
+                            file_path=dst_file,
+                            artist=clean_art,
+                            title=clean_tit,
+                            album=mixtape_album_title,
+                            track_num=idx,
+                            total_tracks=total_tracks
+                        )
                 else:
                     if progress_callback:
-                        progress_callback(idx, total_tracks, disp_title, "Copying...")
+                        progress_callback(idx, total_tracks, disp_title, "Copying & optimizing tags...")
                     shutil.copy2(src_file, dst_file)
                     copied_count += 1
+                    # Ensure directly copied files also receive car-optimized ID3v2.3 tags and synced track numbers
+                    write_car_optimized_tags(
+                        file_path=dst_file,
+                        artist=clean_art,
+                        title=clean_tit,
+                        album=mixtape_album_title,
+                        track_num=idx,
+                        total_tracks=total_tracks
+                    )
 
                 dur_int = int(trk.get("duration_s", 0))
-                m3u_lines.append(f"#EXTINF:{dur_int},{trk['artist']} - {trk['title']}\n")
+                m3u_lines.append(f"#EXTINF:{dur_int},{clean_art} - {clean_tit}\n")
                 m3u_lines.append(f"{dst_filename}\n")
 
             except Exception as e:

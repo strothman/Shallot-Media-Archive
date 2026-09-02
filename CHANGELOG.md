@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- full library squeeze mode with 256k/192k/160k/128k compression for max CD capacity (66ee147)
+
+### Added
 - anti-bloat song length filter, wide library vibe expansion, and HTML jewel case insert generator (4df76a2)
 
 ### Added

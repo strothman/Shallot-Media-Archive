@@ -2110,16 +2110,15 @@ class DownloaderApp(ctk.CTk):
         self.theme_titles.append(cd_card2_lbl)
 
         cd_grid = ctk.CTkFrame(self.cd_settings_card, fg_color="transparent")
-        cd_grid.pack(fill="x", padx=15, pady=(1, 4))
-        cd_grid.columnconfigure(0, weight=2)
-        cd_grid.columnconfigure(1, weight=2)
-        cd_grid.columnconfigure(2, weight=2)
-        cd_grid.columnconfigure(3, weight=2)
-        cd_grid.columnconfigure(4, weight=3)
+        cd_grid.pack(fill="x", padx=15, pady=(1, 6))
+        cd_grid.columnconfigure(0, weight=1)
+        cd_grid.columnconfigure(1, weight=1)
+        cd_grid.columnconfigure(2, weight=1)
+        cd_grid.columnconfigure(3, weight=1)
 
-        # Col 0: Disc Preset
+        # Row 0, Col 0: Disc Preset
         f_cap = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_cap.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        f_cap.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(0, 4))
         lbl_cap = ctk.CTkLabel(f_cap, text="Target Disc Media", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_cap.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_cap)
@@ -2138,9 +2137,9 @@ class DownloaderApp(ctk.CTk):
         self.cd_preset_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_preset_menu)
 
-        # Col 1: Seed Track Count
+        # Row 0, Col 1: Seed Track Count
         f_seed_cnt = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_seed_cnt.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        f_seed_cnt.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(0, 4))
         lbl_scnt = ctk.CTkLabel(f_seed_cnt, text="Seed Artist Hits (Max)", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_scnt.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_scnt)
@@ -2160,9 +2159,9 @@ class DownloaderApp(ctk.CTk):
         self.cd_seed_count_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_seed_count_menu)
 
-        # Col 2: Max Tracks Per Vibe Artist
+        # Row 0, Col 2: Max Tracks Per Vibe Artist
         f_vibe_max = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_vibe_max.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+        f_vibe_max.grid(row=0, column=2, sticky="ew", padx=(0, 6), pady=(0, 4))
         lbl_vmax = ctk.CTkLabel(f_vibe_max, text="Max Per Vibe Artist", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_vmax.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_vmax)
@@ -2182,9 +2181,9 @@ class DownloaderApp(ctk.CTk):
         self.cd_max_vibe_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_max_vibe_menu)
 
-        # Col 3: Max Track Duration (Anti-Bloat Filter)
+        # Row 0, Col 3: Max Track Duration (Anti-Bloat Filter)
         f_dur_max = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_dur_max.grid(row=0, column=3, sticky="ew", padx=(0, 6))
+        f_dur_max.grid(row=0, column=3, sticky="ew", pady=(0, 4))
         lbl_dmax = ctk.CTkLabel(f_dur_max, text="Max Song Length", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_dmax.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_dmax)
@@ -2203,30 +2202,54 @@ class DownloaderApp(ctk.CTk):
         self.cd_max_dur_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_max_dur_menu)
 
-        # Col 4: Transcode switch, Bitrate, and Generate button
-        f_action_top = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_action_top.grid(row=0, column=4, sticky="ew")
-        
-        self.cd_bitrate_menu = ctk.CTkOptionMenu(
-            f_action_top,
-            values=["320k Transcode", "256k Transcode", "192k Transcode"],
-            height=22,
-            font=("Segoe UI", 9)
+        # Row 1, Col 0 & 1: Compression / Squeeze Mode
+        f_squeeze = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_squeeze.grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        lbl_sqz = ctk.CTkLabel(f_squeeze, text="Compression / Squeeze Mode", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_sqz.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_sqz)
+        self.cd_squeeze_mode_menu = ctk.CTkOptionMenu(
+            f_squeeze,
+            values=[
+                "Squeeze All Tracks (Fit Max Songs on Disc)",
+                "Only Squeeze FLAC / Lossless to MP3",
+                "Original Files (No Compression)"
+            ],
+            height=28,
+            font=("Segoe UI", 10)
         )
+        self.cd_squeeze_mode_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_squeeze_mode_menu)
+
+        # Row 1, Col 2: Target MP3 Bitrate
+        f_trans = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_trans.grid(row=1, column=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        lbl_trans = ctk.CTkLabel(f_trans, text="Target MP3 Bitrate", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_trans.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_trans)
+        self.cd_bitrate_menu = ctk.CTkOptionMenu(
+            f_trans,
+            values=[
+                "256 kbps (Car Stereo - ~105 Songs)",
+                "192 kbps (High Squeeze - ~140 Songs)",
+                "160 kbps (Super Squeeze - ~165 Songs)",
+                "128 kbps (Max Squeeze - ~200+ Songs)",
+                "320 kbps (High Quality - ~80 Songs)"
+            ],
+            height=28,
+            font=("Segoe UI", 10)
+        )
+        self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_bitrate_menu)
 
-        self.cd_transcode_switch = ctk.CTkSwitch(
-            f_action_top,
-            text="Squeeze FLAC",
-            font=("Segoe UI", 9),
-            height=16
-        )
-        self.cd_transcode_switch.select()
-        self.cd_transcode_switch.pack(anchor="w", pady=(0, 2))
-        self.theme_switches.append(self.cd_transcode_switch)
+        # Row 1, Col 3: Generate Button
+        f_btn_box = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_btn_box.grid(row=1, column=3, sticky="ew", pady=(3, 0))
+        lbl_blank = ctk.CTkLabel(f_btn_box, text=" ", font=("Segoe UI", 9))
+        lbl_blank.pack(anchor="w")
 
         self.btn_cd_generate = ctk.CTkButton(
-            f_action_top,
+            f_btn_box,
             text="⚡ Generate & Pack Mixtape",
             font=("Segoe UI", 11, "bold"),
             height=28,
@@ -5686,11 +5709,18 @@ class DownloaderApp(ctk.CTk):
         else:
             max_dur_s = 270
 
-        # Parse transcode & bitrate
-        transcode_lossless = bool(self.cd_transcode_switch.get())
+        # Parse squeeze mode & bitrate
+        raw_sqz = self.cd_squeeze_mode_menu.get().lower()
+        if "all" in raw_sqz:
+            squeeze_mode = "all"
+        elif "lossless" in raw_sqz or "flac" in raw_sqz:
+            squeeze_mode = "lossless_only"
+        else:
+            squeeze_mode = "none"
+
         raw_br = self.cd_bitrate_menu.get()
         m_br = re.search(r'\d+', raw_br)
-        bitrate_kbps = int(m_br.group()) if m_br else 320
+        bitrate_kbps = int(m_br.group()) if m_br else 256
 
         self.btn_cd_generate.configure(state="disabled", text="Generating...")
         self.btn_cd_export.configure(state="disabled")
@@ -5716,10 +5746,11 @@ class DownloaderApp(ctk.CTk):
                     seed_artist_name=seed_artist,
                     seed_track_count=seed_cnt,
                     preset_key=preset_key,
-                    transcode_lossless_to_mp3=transcode_lossless,
+                    transcode_lossless_to_mp3=(squeeze_mode != "none"),
                     target_mp3_kbps=bitrate_kbps,
                     max_vibe_tracks_per_artist=max_vibe_cnt,
                     max_song_duration_s=max_dur_s,
+                    squeeze_mode=squeeze_mode,
                     progress_callback=lambda msg: self.after(0, lambda m=msg: self.cd_export_status_lbl.configure(text=m, text_color="#38BDF8"))
                 )
                 self.cd_mixtape_plan = plan
@@ -5858,7 +5889,7 @@ class DownloaderApp(ctk.CTk):
 
         raw_br = self.cd_bitrate_menu.get()
         m_br = re.search(r'\d+', raw_br)
-        bitrate_kbps = int(m_br.group()) if m_br else 320
+        bitrate_kbps = int(m_br.group()) if m_br else 256
 
         self.btn_cd_export.configure(state="disabled", text="Exporting...")
         self.btn_cd_generate.configure(state="disabled")

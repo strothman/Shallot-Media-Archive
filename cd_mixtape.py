@@ -506,6 +506,23 @@ def is_valid_mixtape_track(trk: Dict, max_dur_s: int = 270) -> bool:
     return True
 
 
+def should_transcode_track(trk: Dict, squeeze_mode: str, target_kbps: int) -> bool:
+    """Determines whether a track should be transcoded to reduce filesize."""
+    if squeeze_mode == "none":
+        return False
+    if squeeze_mode == "lossless_only":
+        return trk.get("is_lossless", False)
+    # squeeze_mode == "all" (compress lossless and any file with higher bitrate than target)
+    if trk.get("is_lossless", False):
+        return True
+    dur = trk.get("duration_s", 0) or 210
+    if dur > 0:
+        est_curr_kbps = int((trk.get("size_bytes", 0) * 8) / dur / 1000)
+        if est_curr_kbps > target_kbps + 15:
+            return True
+    return False
+
+
 class CDMixtapePlanner:
     """
     Coordinates Spotify recommendations, local library matching,
@@ -522,16 +539,20 @@ class CDMixtapePlanner:
         seed_track_count: int = 20,
         preset_key: str = "700MB_DATA_CD",
         transcode_lossless_to_mp3: bool = True,
-        target_mp3_kbps: int = 320,
+        target_mp3_kbps: int = 256,
         custom_capacity_mb: Optional[int] = None,
         max_vibe_tracks_per_artist: int = 3,
         max_song_duration_s: int = 270,
+        squeeze_mode: str = "all",
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict:
         """
         Plans the full mixtape to fill capacity cleanly with ZERO duplicates,
-        strict max song length (<= 4:30 to eliminate bloat mixes), and high diversity.
+        strict max song length (<= 4:30), and selectable compression/squeeze mode.
         """
+        if not transcode_lossless_to_mp3:
+            squeeze_mode = "none"
+
         preset = CAPACITY_PRESETS.get(preset_key, CAPACITY_PRESETS["700MB_DATA_CD"])
         cap_type = preset["type"]
         
@@ -560,12 +581,13 @@ class CDMixtapePlanner:
         related_artists = self.recommender.get_related_artists(seed_artist_id, real_seed_name)
 
         # 4. Helper to calculate effective track size / duration
-        def get_track_metric(local_trk: Dict) -> Tuple[int, int]:
+        def get_track_metric(local_trk: Dict) -> Tuple[int, int, bool]:
             orig_bytes = local_trk["size_bytes"]
             dur_s = local_trk["duration_s"] or 210
             
-            if transcode_lossless_to_mp3 and local_trk["is_lossless"]:
-                est_bytes = int((dur_s * (target_mp3_kbps * 1000) / 8) + 131072)
+            will_trans = should_transcode_track(local_trk, squeeze_mode, target_mp3_kbps)
+            if will_trans:
+                est_bytes = int((dur_s * (target_mp3_kbps * 1000) / 8) + 65536)
             else:
                 est_bytes = orig_bytes
 
@@ -574,7 +596,7 @@ class CDMixtapePlanner:
             else:
                 metric = est_bytes
 
-            return metric, est_bytes
+            return metric, est_bytes, will_trans
 
         # 5. Build candidate pools from local library
         if progress_callback:
@@ -595,7 +617,7 @@ class CDMixtapePlanner:
         current_metric_total = 0
         current_bytes_total = 0
 
-        # Phase 1: Match Seed Artist Top Tracks (Seed tracks can exceed 4:30 only if user specifically wanted that seed song, but skip extreme bloat)
+        # Phase 1: Match Seed Artist Top Tracks
         matched_seed_tracks = []
         for s_trk in spotify_seed_tracks:
             norm_title = normalize_string(s_trk["title"])
@@ -637,7 +659,7 @@ class CDMixtapePlanner:
             if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
                 continue
 
-            m_val, est_b = get_track_metric(loc_trk)
+            m_val, est_b, will_tr = get_track_metric(loc_trk)
             if current_metric_total + m_val <= target_limit:
                 current_metric_total += m_val
                 current_bytes_total += est_b
@@ -649,7 +671,7 @@ class CDMixtapePlanner:
                     "popularity": pop_score,
                     "role": role,
                     "role_desc": f"Seed: {loc_trk['artist']}",
-                    "will_transcode": transcode_lossless_to_mp3 and loc_trk["is_lossless"]
+                    "will_transcode": will_tr
                 })
             else:
                 break
@@ -697,7 +719,7 @@ class CDMixtapePlanner:
             if vibe_artist_counts.get(art_key, 0) >= max_vibe_tracks_per_artist:
                 continue
 
-            m_val, est_b = get_track_metric(loc_trk)
+            m_val, est_b, will_tr = get_track_metric(loc_trk)
             if current_metric_total + m_val <= target_limit:
                 current_metric_total += m_val
                 current_bytes_total += est_b
@@ -710,7 +732,7 @@ class CDMixtapePlanner:
                     "popularity": pop_score,
                     "role": role,
                     "role_desc": role_desc,
-                    "will_transcode": transcode_lossless_to_mp3 and loc_trk["is_lossless"]
+                    "will_transcode": will_tr
                 })
 
         # Phase 2.5: Wide Library Vibe & Variety Expansion
@@ -749,7 +771,7 @@ class CDMixtapePlanner:
                 if vibe_artist_counts.get(art_key, 0) >= max_vibe_tracks_per_artist:
                     continue
 
-                m_val, est_b = get_track_metric(loc_trk)
+                m_val, est_b, will_tr = get_track_metric(loc_trk)
                 if current_metric_total + m_val <= target_limit:
                     current_metric_total += m_val
                     current_bytes_total += est_b
@@ -762,7 +784,7 @@ class CDMixtapePlanner:
                         "popularity": pop_score,
                         "role": role,
                         "role_desc": role_desc,
-                        "will_transcode": transcode_lossless_to_mp3 and loc_trk["is_lossless"]
+                        "will_transcode": will_tr
                     })
                 else:
                     break
@@ -791,13 +813,14 @@ class CDMixtapePlanner:
                 best_diff = float("inf")
                 best_metric = 0
                 best_est_b = 0
+                best_will_tr = False
 
                 for candidate in remaining_library_tracks:
                     c_art = candidate["norm_artist"]
                     if filler_artist_counts.get(c_art, 0) >= 1 or vibe_artist_counts.get(c_art, 0) >= max_vibe_tracks_per_artist:
                         continue
 
-                    m_val, est_b = get_track_metric(candidate)
+                    m_val, est_b, will_tr = get_track_metric(candidate)
                     if m_val <= remaining_capacity:
                         diff = remaining_capacity - m_val
                         if diff < best_diff:
@@ -805,6 +828,7 @@ class CDMixtapePlanner:
                             best_fit = candidate
                             best_metric = m_val
                             best_est_b = est_b
+                            best_will_tr = will_tr
 
                 if best_fit:
                     best_key = canonical_track_key(best_fit["artist"], best_fit["title"])
@@ -826,7 +850,7 @@ class CDMixtapePlanner:
                         "popularity": 40,
                         "role": "filler",
                         "role_desc": f"Filler: {best_fit['artist']}",
-                        "will_transcode": transcode_lossless_to_mp3 and best_fit["is_lossless"]
+                        "will_transcode": best_will_tr
                     })
                 else:
                     break

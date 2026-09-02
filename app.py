@@ -5896,6 +5896,9 @@ class DownloaderApp(ctk.CTk):
         self.cd_is_exporting = True
         self.cd_export_progress_bar.set(0)
 
+        def on_export_progress(cur: int, tot: int, name: str, status: str):
+            self.after(0, lambda c=cur, t=tot, n=name, s=status: self._update_cd_export_progress(c, t, n, s))
+
         def run_export():
             try:
                 ffmpeg_bin = self.get_file_path("ffmpeg.exe")
@@ -5906,9 +5909,7 @@ class DownloaderApp(ctk.CTk):
                     mixtape_plan=self.cd_mixtape_plan,
                     destination_dir=dest_dir,
                     mp3_bitrate_kbps=bitrate_kbps,
-                    progress_callback=lambda cur, tot, name, status: self.after(
-                        0, lambda c=cur, t=tot, n=name, s=status: self._update_cd_export_progress(c, t, n, s)
-                    )
+                    progress_callback=on_export_progress
                 )
                 self.after(0, lambda: self._on_cd_export_complete(res))
             except Exception as e:

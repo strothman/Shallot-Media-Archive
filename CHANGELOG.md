@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- import typing definitions in app.py for clean silent startup (5d3de51)
+
 ### Added
 - add 700MB CD Mixtape and burn prep utility (f0890af)
 

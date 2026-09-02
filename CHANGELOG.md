@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- anti-bloat song length filter, wide library vibe expansion, and HTML jewel case insert generator (4df76a2)
+
+### Added
 - add Max Per Vibe Artist dropdown selector in CD Mixtape Builder (6b59d96)
 
 ### Added

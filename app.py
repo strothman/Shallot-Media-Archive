@@ -27,6 +27,7 @@ from spotify_sync import SpotifyAuthHelper, SpotifyFetcher, SpotifyPlexampPipeli
 from youtube_sync import YouTubeFetcher, YouTubePlexampPipeline
 from local_sync import LocalAudioScanner, LocalPlexampPipeline
 from audio_verifier import AudioFactChecker
+from cd_mixtape import CDMixtapePlanner, CDMixtapeExporter, LocalLibraryIndex, SpotifyRecommender, CAPACITY_PRESETS
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
 base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +81,15 @@ class DownloaderApp(ctk.CTk):
         self.verifier_cancel_event = threading.Event()
         self.verifier_filter_mode = "all"
         self.verifier_active_workers = {}
+
+        # --- CD Mixtape State ---
+        self.cd_library_index = None
+        self.cd_mixtape_plan = None
+        self.cd_track_items = []
+        self.cd_is_scanning_library = False
+        self.cd_is_generating = False
+        self.cd_is_exporting = False
+        self.cd_exporter = None
 
         # --- Custom Window & Taskbar Icon ---
         icon_path = self.get_file_path("shallot.ico")
@@ -204,6 +214,17 @@ class DownloaderApp(ctk.CTk):
             command=lambda: self.select_tab("verifier")
         )
         self.btn_verifier.pack(fill="x", padx=15, pady=4)
+
+        self.btn_cd_mixtape = ctk.CTkButton(
+            self.sidebar_frame,
+            text="💿  CD Mixtape Builder",
+            font=("Segoe UI", 12, "bold"),
+            height=38,
+            corner_radius=8,
+            anchor="w",
+            command=lambda: self.select_tab("cd_mixtape")
+        )
+        self.btn_cd_mixtape.pack(fill="x", padx=15, pady=4)
 
         self.btn_settings = ctk.CTkButton(
             self.sidebar_frame,
@@ -1952,6 +1973,369 @@ class DownloaderApp(ctk.CTk):
         self.theme_buttons_secondary.append(self.btn_verifier_open_folder)
 
         # =========================================================================
+        # --- Page: CD Mixtape Builder ---
+        # =========================================================================
+        self.cd_mixtape_page = ctk.CTkFrame(self.main_container, fg_color="transparent")
+
+        lbl_p_cd = ctk.CTkLabel(self.cd_mixtape_page, text="💿 CD Mixtape & 700MB Burn Prep", font=("Segoe UI", 18, "bold"), anchor="w")
+        lbl_p_cd.pack(fill="x", padx=20, pady=(15, 6))
+        self.page_titles.append(lbl_p_cd)
+
+        # Card 1: Source Library & Seed Artist Card
+        self.cd_source_card = ctk.CTkFrame(self.cd_mixtape_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.cd_source_card.pack(fill="x", padx=20, pady=3)
+
+        cd_card1_lbl = ctk.CTkLabel(self.cd_source_card, text="LIBRARY SOURCE & SEED ARTIST", font=("Segoe UI", 11, "bold"), text_color="#00E5FF")
+        cd_card1_lbl.pack(anchor="w", padx=15, pady=(8, 2))
+        self.theme_titles.append(cd_card1_lbl)
+
+        # Row 1: Source Music Folder
+        lbl_cd_src = ctk.CTkLabel(self.cd_source_card, text="MUSIC LIBRARY FOLDER (SCAN SOURCE)", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_cd_src.pack(anchor="w", padx=15, pady=(1, 0))
+        self.theme_labels_secondary.append(lbl_cd_src)
+
+        cd_src_frame = ctk.CTkFrame(self.cd_source_card, fg_color="transparent")
+        cd_src_frame.pack(fill="x", padx=15, pady=(1, 3))
+
+        self.cd_library_folder_input = ctk.CTkEntry(
+            cd_src_frame,
+            placeholder_text="e.g. D:\\Music or C:\\SMA-downloads\\Music...",
+            height=30,
+            fg_color="#070F15",
+            border_color="#1F3A4E",
+            text_color="#F5F5F7"
+        )
+        saved_cd_lib = self.saved_settings.get("plex_music_folder", "") or self.saved_settings.get("destination_folder", "") or r"C:\SMA-downloads\Music"
+        self.cd_library_folder_input.insert(0, saved_cd_lib)
+        self.cd_library_folder_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.theme_entries.append(self.cd_library_folder_input)
+
+        self.btn_cd_browse_lib = ctk.CTkButton(
+            cd_src_frame,
+            text="📂 Browse",
+            width=75,
+            height=30,
+            font=("Segoe UI", 10, "bold"),
+            command=self.browse_cd_library_folder
+        )
+        self.btn_cd_browse_lib.pack(side="left", padx=(0, 6))
+        self.theme_buttons_secondary.append(self.btn_cd_browse_lib)
+
+        self.btn_cd_scan_lib = ctk.CTkButton(
+            cd_src_frame,
+            text="⚡ Scan Library",
+            width=95,
+            height=30,
+            font=("Segoe UI", 10, "bold"),
+            command=self.scan_cd_library_artists
+        )
+        self.btn_cd_scan_lib.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_cd_scan_lib)
+
+        # Row 2: Seed Artist Selection & Stats
+        cd_seed_row = ctk.CTkFrame(self.cd_source_card, fg_color="transparent")
+        cd_seed_row.pack(fill="x", padx=15, pady=(1, 3))
+
+        cd_seed_left = ctk.CTkFrame(cd_seed_row, fg_color="transparent")
+        cd_seed_left.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        lbl_cd_seed = ctk.CTkLabel(cd_seed_left, text="SEED ARTIST (TYPE OR SELECT FROM LIBRARY)", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_cd_seed.pack(anchor="w", pady=(0, 1))
+        self.theme_labels_secondary.append(lbl_cd_seed)
+
+        self.cd_seed_artist_cb = ctk.CTkComboBox(
+            cd_seed_left,
+            values=["Glass Animals", "Select or Type Artist..."],
+            height=30,
+            font=("Segoe UI", 11),
+            fg_color="#070F15",
+            border_color="#1F3A4E",
+            text_color="#F5F5F7",
+            dropdown_fg_color="#151B26"
+        )
+        self.cd_seed_artist_cb.set("Glass Animals")
+        self.cd_seed_artist_cb.pack(fill="x")
+        self.theme_option_menus.append(self.cd_seed_artist_cb)
+
+        cd_seed_right = ctk.CTkFrame(cd_seed_row, fg_color="transparent")
+        cd_seed_right.pack(side="right", fill="x", expand=True)
+
+        lbl_cd_out = ctk.CTkLabel(cd_seed_right, text="CD BURN DESTINATION DIRECTORY", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_cd_out.pack(anchor="w", pady=(0, 1))
+        self.theme_labels_secondary.append(lbl_cd_out)
+
+        cd_out_box = ctk.CTkFrame(cd_seed_right, fg_color="transparent")
+        cd_out_box.pack(fill="x")
+
+        self.cd_output_folder_input = ctk.CTkEntry(
+            cd_out_box,
+            placeholder_text=r"C:\SMA-downloads\CD_Mixtapes",
+            height=30,
+            fg_color="#070F15",
+            border_color="#1F3A4E",
+            text_color="#F5F5F7"
+        )
+        saved_cd_out = self.saved_settings.get("cd_output_folder", "") or r"C:\SMA-downloads\CD_Mixtapes"
+        self.cd_output_folder_input.insert(0, saved_cd_out)
+        self.cd_output_folder_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.theme_entries.append(self.cd_output_folder_input)
+
+        self.btn_cd_browse_out = ctk.CTkButton(
+            cd_out_box,
+            text="📂 Browse",
+            width=75,
+            height=30,
+            font=("Segoe UI", 10, "bold"),
+            command=self.browse_cd_output_folder
+        )
+        self.btn_cd_browse_out.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_cd_browse_out)
+
+        self.cd_library_stats_lbl = ctk.CTkLabel(
+            self.cd_source_card,
+            text="Click 'Scan Library' to index available artists from your music folder.",
+            font=("Segoe UI", 9),
+            text_color="#94A3B8",
+            anchor="w"
+        )
+        self.cd_library_stats_lbl.pack(fill="x", padx=15, pady=(1, 6))
+
+        # Card 2: Packing Options & Capacity Configuration
+        self.cd_settings_card = ctk.CTkFrame(self.cd_mixtape_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.cd_settings_card.pack(fill="x", padx=20, pady=3)
+
+        cd_card2_lbl = ctk.CTkLabel(self.cd_settings_card, text="CAPACITY & VIBE PACKING OPTIONS", font=("Segoe UI", 11, "bold"), text_color="#00E5FF")
+        cd_card2_lbl.pack(anchor="w", padx=15, pady=(8, 2))
+        self.theme_titles.append(cd_card2_lbl)
+
+        cd_grid = ctk.CTkFrame(self.cd_settings_card, fg_color="transparent")
+        cd_grid.pack(fill="x", padx=15, pady=(1, 4))
+        cd_grid.columnconfigure(0, weight=2)
+        cd_grid.columnconfigure(1, weight=2)
+        cd_grid.columnconfigure(2, weight=2)
+        cd_grid.columnconfigure(3, weight=3)
+
+        # Col 0: Disc Preset
+        f_cap = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_cap.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        lbl_cap = ctk.CTkLabel(f_cap, text="Target Disc Media", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_cap.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_cap)
+        self.cd_preset_menu = ctk.CTkOptionMenu(
+            f_cap,
+            values=[
+                "700 MB Data CD (MP3 / M4A)",
+                "650 MB Data CD",
+                "800 MB Data CD",
+                "80-Minute Standard Audio CD (Red Book)",
+                "74-Minute Audio CD"
+            ],
+            height=28,
+            font=("Segoe UI", 10)
+        )
+        self.cd_preset_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_preset_menu)
+
+        # Col 1: Seed Track Count
+        f_seed_cnt = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_seed_cnt.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        lbl_scnt = ctk.CTkLabel(f_seed_cnt, text="Seed Artist Hits", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_scnt.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_scnt)
+        self.cd_seed_count_menu = ctk.CTkOptionMenu(
+            f_seed_cnt,
+            values=[
+                "Top 20 Songs (Default)",
+                "Top 15 Songs",
+                "Top 10 Songs",
+                "Top 25 Songs",
+                "Top 30 Songs"
+            ],
+            height=28,
+            font=("Segoe UI", 10)
+        )
+        self.cd_seed_count_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_seed_count_menu)
+
+        # Col 2: Transcode / Bitrate
+        f_trans = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_trans.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+        lbl_trans = ctk.CTkLabel(f_trans, text="Transcode MP3 Bitrate", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_trans.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_trans)
+        self.cd_bitrate_menu = ctk.CTkOptionMenu(
+            f_trans,
+            values=["320 kbps (High Quality)", "256 kbps (VBR/CBR)", "192 kbps (More Songs)"],
+            height=28,
+            font=("Segoe UI", 10)
+        )
+        self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_bitrate_menu)
+
+        # Col 3: Transcode switch & Generate button
+        f_action_top = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_action_top.grid(row=0, column=3, sticky="ew")
+        
+        self.cd_transcode_switch = ctk.CTkSwitch(
+            f_action_top,
+            text="Squeeze/Transcode FLAC to MP3",
+            font=("Segoe UI", 9),
+            height=16
+        )
+        self.cd_transcode_switch.select()
+        self.cd_transcode_switch.pack(anchor="w", pady=(0, 2))
+        self.theme_switches.append(self.cd_transcode_switch)
+
+        self.btn_cd_generate = ctk.CTkButton(
+            f_action_top,
+            text="⚡ Generate & Pack Mixtape",
+            font=("Segoe UI", 11, "bold"),
+            height=28,
+            corner_radius=6,
+            command=self.start_cd_mixtape_generation
+        )
+        self.btn_cd_generate.pack(fill="x")
+
+        # Card 3: Capacity Visualizer & Statistics Card
+        self.cd_stats_card = ctk.CTkFrame(self.cd_mixtape_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.cd_stats_card.pack(fill="x", padx=20, pady=3)
+
+        cd_stats_header = ctk.CTkFrame(self.cd_stats_card, fg_color="transparent")
+        cd_stats_header.pack(fill="x", padx=15, pady=(6, 2))
+
+        self.cd_capacity_lbl = ctk.CTkLabel(
+            cd_stats_header,
+            text="Capacity: 0.0 MB / 700.0 MB (0.0% Full)",
+            font=("Segoe UI", 11, "bold"),
+            text_color="#00E5FF",
+            anchor="w"
+        )
+        self.cd_capacity_lbl.pack(side="left")
+        self.theme_titles.append(self.cd_capacity_lbl)
+
+        self.cd_track_count_lbl = ctk.CTkLabel(
+            cd_stats_header,
+            text="0 Tracks  •  0m 00s Total Playback",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#F5F5F7",
+            anchor="e"
+        )
+        self.cd_track_count_lbl.pack(side="right")
+
+        self.cd_capacity_bar = ctk.CTkProgressBar(
+            self.cd_stats_card,
+            height=10,
+            corner_radius=5,
+            progress_color="#00E5FF",
+            fg_color="#070F15"
+        )
+        self.cd_capacity_bar.set(0)
+        self.cd_capacity_bar.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.cd_breakdown_lbl = ctk.CTkLabel(
+            self.cd_stats_card,
+            text="Seed: 0 tracks  •  Vibe: 0 tracks  •  Filler: 0 tracks",
+            font=("Segoe UI", 9),
+            text_color="#94A3B8",
+            anchor="w"
+        )
+        self.cd_breakdown_lbl.pack(fill="x", padx=15, pady=(0, 6))
+
+        # Card 4: Mixtape Track Preview List
+        self.cd_tracks_card = ctk.CTkFrame(self.cd_mixtape_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.cd_tracks_card.pack(fill="both", expand=True, padx=20, pady=3)
+
+        cd_t_hdr = ctk.CTkFrame(self.cd_tracks_card, fg_color="transparent")
+        cd_t_hdr.pack(fill="x", padx=15, pady=(6, 2))
+
+        cd_t_title = ctk.CTkLabel(cd_t_hdr, text="MIXTAPE TRACKLIST PREVIEW", font=("Segoe UI", 11, "bold"), text_color="#00E5FF")
+        cd_t_title.pack(side="left")
+        self.theme_titles.append(cd_t_title)
+
+        self.cd_tracks_scroll = ctk.CTkScrollableFrame(self.cd_tracks_card, fg_color="transparent", corner_radius=8)
+        self.cd_tracks_scroll.pack(fill="both", expand=True, padx=10, pady=(2, 6))
+
+        # Card 5: Export & Action Card
+        self.cd_action_card = ctk.CTkFrame(self.cd_mixtape_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
+        self.cd_action_card.pack(fill="x", padx=20, pady=(3, 10))
+
+        cd_act_top = ctk.CTkFrame(self.cd_action_card, fg_color="transparent")
+        cd_act_top.pack(fill="x", padx=15, pady=(6, 2))
+
+        self.cd_export_status_lbl = ctk.CTkLabel(
+            cd_act_top,
+            text="Ready. Select an artist and click 'Generate & Pack Mixtape'.",
+            font=("Segoe UI", 10),
+            text_color="#94A3B8",
+            anchor="w"
+        )
+        self.cd_export_status_lbl.pack(side="left")
+        self.theme_labels_secondary.append(self.cd_export_status_lbl)
+
+        self.cd_export_counter_lbl = ctk.CTkLabel(
+            cd_act_top,
+            text="0 / 0",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#F5F5F7",
+            anchor="e"
+        )
+        self.cd_export_counter_lbl.pack(side="right")
+
+        self.cd_export_progress_bar = ctk.CTkProgressBar(
+            self.cd_action_card,
+            height=6,
+            corner_radius=3,
+            progress_color="#00E5FF",
+            fg_color="#070F15"
+        )
+        self.cd_export_progress_bar.set(0)
+        self.cd_export_progress_bar.pack(fill="x", padx=15, pady=(2, 4))
+
+        cd_act_btns = ctk.CTkFrame(self.cd_action_card, fg_color="transparent")
+        cd_act_btns.pack(fill="x", padx=15, pady=(2, 8))
+
+        self.btn_cd_export = ctk.CTkButton(
+            cd_act_btns,
+            text="🚀  Copy & Export CD Burn Folder",
+            font=("Segoe UI", 11, "bold"),
+            height=34,
+            corner_radius=8,
+            command=self.start_cd_export
+        )
+        self.btn_cd_export.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_cd_cancel = ctk.CTkButton(
+            cd_act_btns,
+            text="⏹ Cancel",
+            width=85,
+            height=34,
+            font=("Segoe UI", 10, "bold"),
+            fg_color="#3B1214",
+            hover_color="#5C1D20",
+            border_color="#F43F5E",
+            border_width=1,
+            text_color="#F43F5E",
+            command=self.cancel_cd_operation
+        )
+        self.btn_cd_cancel.pack(side="left", padx=(0, 6))
+
+        self.btn_cd_open_folder = ctk.CTkButton(
+            cd_act_btns,
+            text="📂 Open CD Folder",
+            font=("Segoe UI", 11, "bold"),
+            height=34,
+            width=140,
+            corner_radius=8,
+            fg_color="#0E1A24",
+            border_color="#00E5FF",
+            border_width=1,
+            text_color="#00E5FF",
+            command=self.open_cd_output_folder
+        )
+        self.btn_cd_open_folder.pack(side="right")
+        self.theme_buttons_secondary.append(self.btn_cd_open_folder)
+
+        # =========================================================================
         # --- Page 4: Settings Page ---
         # =========================================================================
         self.settings_page = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -2612,6 +2996,7 @@ class DownloaderApp(ctk.CTk):
             "yt_plexamp": (self.btn_yt_plexamp, self.yt_plexamp_page),
             "local_plexamp": (self.btn_local_plexamp, self.local_plexamp_page),
             "verifier": (self.btn_verifier, self.verifier_page),
+            "cd_mixtape": (self.btn_cd_mixtape, self.cd_mixtape_page),
             "settings": (self.btn_settings, self.settings_page),
             "logs": (self.btn_logs, self.logs_page)
         }
@@ -4350,7 +4735,11 @@ class DownloaderApp(ctk.CTk):
             self.yt_plexamp_input_card, self.yt_plexamp_meta_card, self.yt_plexamp_tracks_card,
             self.yt_plexamp_action_card,
             self.local_input_card, self.local_meta_card, self.local_tracks_card,
-            self.local_action_card
+            self.local_action_card,
+            self.verifier_source_card, self.verifier_stats_card, self.verifier_results_card,
+            self.verifier_action_card,
+            self.cd_source_card, self.cd_settings_card, self.cd_stats_card,
+            self.cd_tracks_card, self.cd_action_card
         ]
         for card in cards:
             card.configure(
@@ -5136,6 +5525,347 @@ class DownloaderApp(ctk.CTk):
             self.verifier_status_lbl.configure(text=f"Report exported to: {os.path.basename(file_path)}", text_color="#4ADE80")
             self.log(f"Fact-check report exported to: {file_path}")
 
+    # =========================================================================
+    # --- CD Mixtape Builder Logic & Workers ---
+    # =========================================================================
+
+    def browse_cd_library_folder(self):
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(title="Select Local Music Library Folder")
+        if folder:
+            self.cd_library_folder_input.delete(0, "end")
+            self.cd_library_folder_input.insert(0, folder)
+            self.save_setting("plex_music_folder", folder)
+
+    def browse_cd_output_folder(self):
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(title="Select Destination Folder for CD Burn Mixtapes")
+        if folder:
+            self.cd_output_folder_input.delete(0, "end")
+            self.cd_output_folder_input.insert(0, folder)
+            self.save_setting("cd_output_folder", folder)
+
+    def open_cd_output_folder(self):
+        folder = self.cd_output_folder_input.get().strip() or r"C:\SMA-downloads\CD_Mixtapes"
+        if not os.path.exists(folder):
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception:
+                pass
+        try:
+            os.startfile(folder)
+        except Exception:
+            subprocess.Popen(["explorer", folder])
+
+    def scan_cd_library_artists(self):
+        """Scans the music folder in background and extracts all artists for quick selection."""
+        folder = self.cd_library_folder_input.get().strip()
+        if not folder or not os.path.exists(folder):
+            self.cd_library_stats_lbl.configure(text="Invalid folder path. Please select a valid folder.", text_color="#FB7185")
+            return
+
+        self.btn_cd_scan_lib.configure(state="disabled", text="Scanning...")
+        self.cd_library_stats_lbl.configure(text="Scanning music library for audio files and tags...", text_color="#38BDF8")
+
+        def run_scan():
+            try:
+                idx = LocalLibraryIndex(folder)
+                count = idx.scan(
+                    progress_callback=lambda cur, tot, name: self.after(
+                        0, lambda c=cur, t=tot: self.cd_library_stats_lbl.configure(text=f"Scanning audio files: {c} / {t}...")
+                    )
+                )
+                self.cd_library_index = idx
+                artists = idx.all_artists
+                self.after(0, lambda: self._on_cd_library_scanned_success(count, artists))
+            except Exception as e:
+                self.after(0, lambda err=str(e): self._on_cd_library_scanned_error(err))
+
+        threading.Thread(target=run_scan, daemon=True).start()
+
+    def _on_cd_library_scanned_success(self, count: int, artists: List[str]):
+        self.btn_cd_scan_lib.configure(state="normal", text="⚡ Scan Library")
+        artist_cnt = len(artists)
+        self.cd_library_stats_lbl.configure(
+            text=f"✓ Indexed {count:,} tracks across {artist_cnt:,} artists in local library.",
+            text_color="#4ADE80"
+        )
+        if artists:
+            self.cd_seed_artist_cb.configure(values=artists)
+            curr = self.cd_seed_artist_cb.get().strip()
+            if not curr or curr == "Select or Type Artist...":
+                self.cd_seed_artist_cb.set(artists[0])
+
+    def _on_cd_library_scanned_error(self, err_msg: str):
+        self.btn_cd_scan_lib.configure(state="normal", text="⚡ Scan Library")
+        self.cd_library_stats_lbl.configure(text=f"Scan error: {err_msg}", text_color="#FB7185")
+
+    def start_cd_mixtape_generation(self):
+        """Builds optimal mixtape plan up to 700MB."""
+        folder = self.cd_library_folder_input.get().strip()
+        seed_artist = self.cd_seed_artist_cb.get().strip()
+
+        if not folder or not os.path.exists(folder):
+            self.cd_export_status_lbl.configure(text="Please choose a valid library folder.", text_color="#FB7185")
+            return
+
+        if not seed_artist or seed_artist == "Select or Type Artist...":
+            self.cd_export_status_lbl.configure(text="Please choose or type a seed artist.", text_color="#FB7185")
+            return
+
+        # Parse seed count
+        raw_seed_cnt = self.cd_seed_count_menu.get()
+        m_scnt = re.search(r'\d+', raw_seed_cnt)
+        seed_cnt = int(m_scnt.group()) if m_scnt else 20
+
+        # Parse preset
+        raw_preset = self.cd_preset_menu.get()
+        preset_key = "700MB_DATA_CD"
+        for k, v in CAPACITY_PRESETS.items():
+            if v["name"] == raw_preset:
+                preset_key = k
+                break
+
+        # Parse transcode & bitrate
+        transcode_lossless = bool(self.cd_transcode_switch.get())
+        raw_br = self.cd_bitrate_menu.get()
+        m_br = re.search(r'\d+', raw_br)
+        bitrate_kbps = int(m_br.group()) if m_br else 320
+
+        self.btn_cd_generate.configure(state="disabled", text="Generating...")
+        self.btn_cd_export.configure(state="disabled")
+        self.cd_export_status_lbl.configure(text="Connecting to Spotify & packing local library...", text_color="#38BDF8")
+
+        def run_generation():
+            try:
+                # Ensure index exists
+                if not self.cd_library_index or self.cd_library_index.root_dir != folder:
+                    self.after(0, lambda: self.cd_export_status_lbl.configure(text="Indexing local music files..."))
+                    idx = LocalLibraryIndex(folder)
+                    idx.scan()
+                    self.cd_library_index = idx
+
+                # Credentials if available in settings
+                sp_cid = self.saved_settings.get("spotify_client_id", "")
+                sp_sec = self.saved_settings.get("spotify_client_secret", "")
+                sp_ref = self.saved_settings.get("spotify_refresh_token", "")
+                recommender = SpotifyRecommender(sp_cid, sp_sec, sp_ref)
+
+                planner = CDMixtapePlanner(recommender, self.cd_library_index)
+                plan = planner.plan_mixtape(
+                    seed_artist_name=seed_artist,
+                    seed_track_count=seed_cnt,
+                    preset_key=preset_key,
+                    transcode_lossless_to_mp3=transcode_lossless,
+                    target_mp3_kbps=bitrate_kbps,
+                    progress_callback=lambda msg: self.after(0, lambda m=msg: self.cd_export_status_lbl.configure(text=m, text_color="#38BDF8"))
+                )
+                self.cd_mixtape_plan = plan
+                self.after(0, lambda: self._on_cd_plan_success(plan))
+            except Exception as e:
+                self.after(0, lambda err=str(e): self._on_cd_plan_error(err))
+
+        threading.Thread(target=run_generation, daemon=True).start()
+
+    def _on_cd_plan_success(self, plan: Dict):
+        self.btn_cd_generate.configure(state="normal", text="⚡ Generate & Pack Mixtape")
+        self.btn_cd_export.configure(state="normal")
+        self.display_cd_mixtape_plan(plan)
+
+    def _on_cd_plan_error(self, err_msg: str):
+        self.btn_cd_generate.configure(state="normal", text="⚡ Generate & Pack Mixtape")
+        self.btn_cd_export.configure(state="normal")
+        self.cd_export_status_lbl.configure(text=f"Generation failed: {err_msg}", text_color="#FB7185")
+
+    def display_cd_mixtape_plan(self, plan: Dict):
+        """Renders the capacity visualizer, metrics badges, and tracklist."""
+        summary = plan.get("summary", {})
+        tracks = plan.get("selected_tracks", [])
+
+        total_mb = summary.get("total_mb", 0.0)
+        target_mb = summary.get("target_mb", 700.0)
+        util_pct = summary.get("utilization_pct", 0.0)
+        disp_limit = summary.get("display_limit", "700 MB")
+        dur_str = summary.get("duration_str", "0m 00s")
+        seed_cnt = summary.get("seed_count", 0)
+        vibe_cnt = summary.get("vibe_count", 0)
+        filler_cnt = summary.get("filler_count", 0)
+
+        # Update Capacity Bar & Labels
+        frac = min(1.0, util_pct / 100.0)
+        self.cd_capacity_bar.set(frac)
+        
+        # Dynamic color coding: Emerald green if nicely filled (>= 90%)
+        bar_col = "#10B981" if util_pct >= 90 else "#38BDF8"
+        self.cd_capacity_bar.configure(progress_color=bar_col)
+
+        self.cd_capacity_lbl.configure(
+            text=f"Capacity: {total_mb:.1f} MB / {disp_limit} ({util_pct:.1f}% Full)",
+            text_color=bar_col
+        )
+        self.cd_track_count_lbl.configure(
+            text=f"{len(tracks)} Tracks  •  {dur_str} Total Playback"
+        )
+        self.cd_breakdown_lbl.configure(
+            text=f"🌱 Seed Artist: {seed_cnt} tracks  •  🎵 Vibe Related: {vibe_cnt} tracks  •  🧩 Gap Fit: {filler_cnt} tracks"
+        )
+        self.cd_export_status_lbl.configure(
+            text=f"✓ Mixtape packed successfully! {len(tracks)} tracks ready to burn ({total_mb:.1f} MB).",
+            text_color="#4ADE80"
+        )
+
+        # Clear and populate tracklist
+        for child in self.cd_tracks_scroll.winfo_children():
+            child.destroy()
+
+        input_bg = getattr(self, 'theme_cfg', {}).get('input_bg', '#070F15')
+        border_col = getattr(self, 'theme_cfg', {}).get('border', '#1F3A4E')
+        text_sec = getattr(self, 'theme_cfg', {}).get('text_secondary', '#94A3B8')
+
+        for idx, trk in enumerate(tracks, start=1):
+            row = ctk.CTkFrame(self.cd_tracks_scroll, fg_color=input_bg, border_color=border_col, border_width=1, corner_radius=6, height=32)
+            row.pack(fill="x", padx=2, pady=1)
+            row.pack_propagate(False)
+
+            num_lbl = ctk.CTkLabel(row, text=f"{idx:03d}.", font=("Segoe UI", 9, "bold"), text_color=text_sec, width=28, anchor="e")
+            num_lbl.pack(side="left", padx=(6, 4))
+
+            # Role badge color
+            role = trk.get("role", "vibe")
+            if role == "seed":
+                badge_text = "🌱 SEED"
+                badge_bg = "#064E3B"
+                badge_fg = "#34D399"
+            elif role == "vibe":
+                badge_text = "🎵 VIBE"
+                badge_bg = "#1E1B4B"
+                badge_fg = "#818CF8"
+            else:
+                badge_text = "🧩 GAP"
+                badge_bg = "#312E81"
+                badge_fg = "#A5B4FC"
+
+            badge_lbl = ctk.CTkLabel(
+                row,
+                text=badge_text,
+                font=("Segoe UI", 8, "bold"),
+                fg_color=badge_bg,
+                text_color=badge_fg,
+                corner_radius=4,
+                width=48,
+                height=18
+            )
+            badge_lbl.pack(side="left", padx=(2, 6))
+
+            t_art = trk.get("artist", "Unknown")
+            t_tit = trk.get("title", "Unknown")
+            t_alb = trk.get("album", "")
+
+            disp_str = f"{t_art} - {t_tit}"
+            if t_alb:
+                disp_str += f"   [{t_alb}]"
+            if len(disp_str) > 65:
+                disp_str = disp_str[:62] + "..."
+
+            title_lbl = ctk.CTkLabel(row, text=disp_str, font=("Segoe UI", 9), text_color="#F5F5F7", anchor="w")
+            title_lbl.pack(side="left", fill="x", expand=True, padx=4)
+
+            # Transcode badge / file size
+            eff_mb = trk.get("effective_bytes", trk.get("size_bytes", 0)) / (1024 * 1024)
+            size_str = f"{eff_mb:.1f} MB"
+            if trk.get("will_transcode"):
+                size_str += " ⚡MP3"
+
+            size_lbl = ctk.CTkLabel(row, text=size_str, font=("Segoe UI", 9, "bold"), text_color="#38BDF8", width=75, anchor="e")
+            size_lbl.pack(side="right", padx=(4, 8))
+
+            dur_s = trk.get("duration_s", 0)
+            m = int(dur_s // 60)
+            s = int(dur_s % 60)
+            dur_lbl = ctk.CTkLabel(row, text=f"{m}:{s:02d}", font=("Segoe UI", 9), text_color=text_sec, width=40, anchor="e")
+            dur_lbl.pack(side="right", padx=(0, 4))
+
+    def start_cd_export(self):
+        """Executes non-destructive copying and transcoding into burn folder."""
+        if not self.cd_mixtape_plan or not self.cd_mixtape_plan.get("selected_tracks"):
+            self.cd_export_status_lbl.configure(text="No mixtape planned. Click 'Generate & Pack Mixtape' first.", text_color="#FB7185")
+            return
+
+        dest_dir = self.cd_output_folder_input.get().strip() or r"C:\SMA-downloads\CD_Mixtapes"
+        self.save_setting("cd_output_folder", dest_dir)
+
+        raw_br = self.cd_bitrate_menu.get()
+        m_br = re.search(r'\d+', raw_br)
+        bitrate_kbps = int(m_br.group()) if m_br else 320
+
+        self.btn_cd_export.configure(state="disabled", text="Exporting...")
+        self.btn_cd_generate.configure(state="disabled")
+        self.cd_is_exporting = True
+        self.cd_export_progress_bar.set(0)
+
+        def run_export():
+            try:
+                ffmpeg_bin = self.get_file_path("ffmpeg.exe")
+                exporter = CDMixtapeExporter(ffmpeg_bin)
+                self.cd_exporter = exporter
+
+                res = exporter.export(
+                    mixtape_plan=self.cd_mixtape_plan,
+                    destination_dir=dest_dir,
+                    mp3_bitrate_kbps=bitrate_kbps,
+                    progress_callback=lambda cur, tot, name, status: self.after(
+                        0, lambda c=cur, t=tot, n=name, s=status: self._update_cd_export_progress(c, t, n, s)
+                    )
+                )
+                self.after(0, lambda: self._on_cd_export_complete(res))
+            except Exception as e:
+                self.after(0, lambda err=str(e): self._on_cd_export_error(err))
+
+        threading.Thread(target=run_export, daemon=True).start()
+
+    def _update_cd_export_progress(self, current: int, total: int, track_name: str, status: str):
+        frac = current / total if total > 0 else 0
+        self.cd_export_progress_bar.set(frac)
+        self.cd_export_counter_lbl.configure(text=f"{current} / {total}")
+        self.cd_export_status_lbl.configure(
+            text=f"[{current}/{total}] {status} {track_name}",
+            text_color="#38BDF8"
+        )
+
+    def _on_cd_export_complete(self, res: Dict):
+        self.cd_is_exporting = False
+        self.btn_cd_export.configure(state="normal", text="🚀 Copy & Export CD Burn Folder")
+        self.btn_cd_generate.configure(state="normal")
+        self.cd_export_progress_bar.set(1.0)
+
+        if res.get("cancelled"):
+            self.cd_export_status_lbl.configure(text="Export cancelled by user.", text_color="#FB7185")
+        else:
+            folder = res.get("target_folder", "")
+            copied = res.get("copied_count", 0)
+            transcoded = res.get("transcoded_count", 0)
+            self.cd_export_status_lbl.configure(
+                text=f"✓ CD Mixtape ready! ({copied} copied, {transcoded} transcoded). M3U playlist generated.",
+                text_color="#4ADE80"
+            )
+            self.log(f"CD Burn folder ready at: {folder}")
+            # Automatically reveal the burn folder
+            try:
+                os.startfile(folder)
+            except Exception:
+                subprocess.Popen(["explorer", folder])
+
+    def _on_cd_export_error(self, err_msg: str):
+        self.cd_is_exporting = False
+        self.btn_cd_export.configure(state="normal", text="🚀 Copy & Export CD Burn Folder")
+        self.btn_cd_generate.configure(state="normal")
+        self.cd_export_status_lbl.configure(text=f"Export failed: {err_msg}", text_color="#FB7185")
+
+    def cancel_cd_operation(self):
+        if self.cd_exporter:
+            self.cd_exporter.cancel()
+        self.cd_export_status_lbl.configure(text="Cancelling...", text_color="#FB7185")
+
     def persist_current_state(self):
         """Saves dynamic UI inputs so previous selections are remembered on next launch."""
         try:
@@ -5147,6 +5877,10 @@ class DownloaderApp(ctk.CTk):
                 val = self.spotify_folder_input.get().strip()
                 if val:
                     self.save_setting("plex_music_folder", val)
+            if hasattr(self, 'cd_output_folder_input'):
+                val = self.cd_output_folder_input.get().strip()
+                if val:
+                    self.save_setting("cd_output_folder", val)
         except Exception:
             pass
 

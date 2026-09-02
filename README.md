@@ -36,6 +36,13 @@
 - **Lossless Copy or Transcode**: Direct lossless copy for native MP3/FLAC/M4A or automated high-quality transcode via `ffmpeg`.
 - **Automatic Organization**: Sorts files into standard Plexamp structure (`Music / Artist / Album / 01 - Song.ext`), writes `cover.jpg`, and drops `.lrc` lyrics.
 
+### 💿 CD Mixtape & 700MB Burn Prep Utility
+- **Smart Seed Artist Top Hits**: Pick any artist from your local library (e.g., *Glass Animals*) and automatically select their top most streamed songs based on Spotify / Last.fm statistics.
+- **Spotify Vibe & Similar Artist Discovery**: Discovers related vibe artists and ranks local library tracks by popularity and vibe score.
+- **Knapsack 700MB Bin-Packing**: Maximizes 700MB Data CD capacity (or 80-minute Audio CD limits) to 98–99.9% full using puzzle-piece gap fitting.
+- **Squeeze & Transcode Options**: Optional on-the-fly transcoding of FLAC/lossless files to high-quality MP3 (320k/256k/192k) to fit 150–200+ songs per CD.
+- **Non-Destructive Export**: Never moves or deletes originals; copies to a dedicated folder with numbered tracks (`001 - Title.mp3`) and generates an `.m3u` playlist ready for burning in Windows Media Player, ImgBurn, or CDBurnerXP.
+
 ### 📥 YouTube & Web Media Downloader
 - **Universal Downloader Engine**: Powered by `yt-dlp` and `ffmpeg` for downloading full playlists, video ranges, or standalone media.
 - **Quality & Format Selection**: Supports resolutions up to 4K (2160p), 2K, 1080p, 720p, and custom audio bitrate extraction.

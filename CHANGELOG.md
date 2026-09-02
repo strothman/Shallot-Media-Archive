@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- add Max Per Vibe Artist dropdown selector in CD Mixtape Builder (6b59d96)
+
+### Added
 - expand vibe artist pool when seed artist has fewer songs than cap (680f834)
 
 ### Added

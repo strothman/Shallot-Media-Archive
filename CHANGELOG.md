@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- add 700MB CD Mixtape and burn prep utility (f0890af)
+
 ### Changed
 - chore: rename repository references to Shallot-Media-Archive (e6c7a0f)
 

@@ -471,6 +471,13 @@ class LocalLibraryIndex:
             return None
 
 
+def canonical_track_key(artist: str, title: str) -> str:
+    """Returns a unique canonical identifier for a song (normalized artist + title)."""
+    na = normalize_string(artist)
+    nt = normalize_string(title)
+    return f"{na}:::{nt}"
+
+
 class CDMixtapePlanner:
     """
     Coordinates Spotify recommendations, local library matching,
@@ -492,7 +499,7 @@ class CDMixtapePlanner:
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict:
         """
-        Plans the full mixtape to fill capacity cleanly.
+        Plans the full mixtape to fill capacity cleanly with ZERO duplicates.
         """
         preset = CAPACITY_PRESETS.get(preset_key, CAPACITY_PRESETS["700MB_DATA_CD"])
         cap_type = preset["type"]
@@ -552,6 +559,7 @@ class CDMixtapePlanner:
 
         selected_tracks: List[Dict] = []
         used_file_paths = set()
+        used_track_keys = set()
         current_metric_total = 0
         current_bytes_total = 0
 
@@ -561,7 +569,8 @@ class CDMixtapePlanner:
             norm_title = normalize_string(s_trk["title"])
             best_match = None
             for loc_trk in local_seed_tracks:
-                if loc_trk["file_path"] in used_file_paths:
+                trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
                     continue
                 loc_norm = loc_trk["norm_title"]
                 if loc_norm == norm_title or (len(norm_title) > 4 and norm_title in loc_norm) or (len(loc_norm) > 4 and loc_norm in norm_title):
@@ -569,22 +578,36 @@ class CDMixtapePlanner:
                     break
 
             if best_match:
+                trk_key = canonical_track_key(best_match["artist"], best_match["title"])
                 matched_seed_tracks.append((best_match, s_trk.get("popularity", 80), "seed"))
                 used_file_paths.add(best_match["file_path"])
+                used_track_keys.add(trk_key)
 
         # If library has remaining seed tracks not in the Spotify list, add them up to seed_track_count
         for loc_trk in local_seed_tracks:
-            if loc_trk["file_path"] not in used_file_paths and len(matched_seed_tracks) < seed_track_count:
+            trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+            if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys and len(matched_seed_tracks) < seed_track_count:
                 matched_seed_tracks.append((loc_trk, 50, "seed"))
                 used_file_paths.add(loc_trk["file_path"])
+                used_track_keys.add(trk_key)
 
         matched_seed_tracks = matched_seed_tracks[:seed_track_count]
 
+        # Reset used sets before staging into selected_tracks
+        used_file_paths.clear()
+        used_track_keys.clear()
+
         for loc_trk, pop_score, role in matched_seed_tracks:
+            trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+            if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
+                continue
+
             m_val, est_b = get_track_metric(loc_trk)
             if current_metric_total + m_val <= target_limit:
                 current_metric_total += m_val
                 current_bytes_total += est_b
+                used_file_paths.add(loc_trk["file_path"])
+                used_track_keys.add(trk_key)
                 selected_tracks.append({
                     **loc_trk,
                     "effective_bytes": est_b,
@@ -610,25 +633,31 @@ class CDMixtapePlanner:
                 weight = max(25, 95 - idx * 3)
                 related_norm_map[rel_norm] = (rel_name, weight)
 
-        # Also search for top tracks of related artists to match against library
+        # Add candidate vibe tracks (strictly deduplicating duplicates in candidate pool)
+        seen_candidate_keys = set()
         for norm_art, loc_tracks in self.library_index.artists_map.items():
             if norm_art in related_norm_map:
                 disp_art, weight = related_norm_map[norm_art]
                 for loc_trk in loc_tracks:
-                    if loc_trk["file_path"] not in used_file_paths:
+                    trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+                    if loc_trk["file_path"] not in used_file_paths and trk_key not in used_track_keys and trk_key not in seen_candidate_keys:
+                        seen_candidate_keys.add(trk_key)
                         candidate_vibe_tracks.append((loc_trk, weight, "vibe", f"Vibe: {disp_art}"))
 
         # Sort candidate vibe tracks by similarity weight descending
         candidate_vibe_tracks.sort(key=lambda x: x[1], reverse=True)
 
         for loc_trk, pop_score, role, role_desc in candidate_vibe_tracks:
-            if loc_trk["file_path"] in used_file_paths:
+            trk_key = canonical_track_key(loc_trk["artist"], loc_trk["title"])
+            if loc_trk["file_path"] in used_file_paths or trk_key in used_track_keys:
                 continue
+
             m_val, est_b = get_track_metric(loc_trk)
             if current_metric_total + m_val <= target_limit:
                 current_metric_total += m_val
                 current_bytes_total += est_b
                 used_file_paths.add(loc_trk["file_path"])
+                used_track_keys.add(trk_key)
                 selected_tracks.append({
                     **loc_trk,
                     "effective_bytes": est_b,
@@ -646,10 +675,14 @@ class CDMixtapePlanner:
             if progress_callback:
                 progress_callback("Maximizing disc utilization (fitting gap pieces)...")
 
-            remaining_library_tracks = [
-                t for t in self.library_index.tracks
-                if t["file_path"] not in used_file_paths
-            ]
+            # Collect remaining unique library tracks
+            remaining_library_tracks = []
+            seen_rem_keys = set()
+            for t in self.library_index.tracks:
+                trk_key = canonical_track_key(t["artist"], t["title"])
+                if t["file_path"] not in used_file_paths and trk_key not in used_track_keys and trk_key not in seen_rem_keys:
+                    seen_rem_keys.add(trk_key)
+                    remaining_library_tracks.append(t)
 
             while remaining_capacity > min_slot_size and remaining_library_tracks:
                 best_fit = None
@@ -668,8 +701,13 @@ class CDMixtapePlanner:
                             best_est_b = est_b
 
                 if best_fit:
-                    remaining_library_tracks.remove(best_fit)
+                    best_key = canonical_track_key(best_fit["artist"], best_fit["title"])
+                    remaining_library_tracks = [
+                        t for t in remaining_library_tracks
+                        if t["file_path"] != best_fit["file_path"] and canonical_track_key(t["artist"], t["title"]) != best_key
+                    ]
                     used_file_paths.add(best_fit["file_path"])
+                    used_track_keys.add(best_key)
                     current_metric_total += best_metric
                     current_bytes_total += best_est_b
                     remaining_capacity -= best_metric

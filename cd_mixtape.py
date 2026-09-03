@@ -24,7 +24,7 @@ import threading
 from typing import Dict, List, Optional, Tuple, Callable
 
 import mutagen
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TPOS, TDRC
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TPOS
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 
@@ -619,6 +619,16 @@ def is_valid_mixtape_track(trk: Dict, max_dur_s: int = 270) -> bool:
     return True
 
 
+def get_track_bitrate_kbps(trk: Dict) -> int:
+    """Estimates average bitrate in kbps of a track."""
+    dur = trk.get("duration_s", 0) or 0
+    size = trk.get("size_bytes", 0) or 0
+    if dur > 5 and size > 1024:
+        kbps = int((size * 8) / dur / 1000)
+        return max(32, min(320, kbps))
+    return 256
+
+
 def should_transcode_track(trk: Dict, squeeze_mode: str, target_kbps: int) -> bool:
     """Determines whether a track should be transcoded to reduce filesize."""
     if squeeze_mode == "none":
@@ -658,6 +668,7 @@ class CDMixtapePlanner:
         max_song_duration_s: int = 270,
         squeeze_mode: str = "all",
         mix_style: str = "chaos_shuffle",
+        normalize_audio: str = "ebu_r128",
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict:
         """
@@ -694,16 +705,30 @@ class CDMixtapePlanner:
         current_metric_total = 0
         current_bytes_total = 0
 
-        # Helper to calculate effective track size / duration
+        is_normalizing = (normalize_audio or "").lower().strip() not in ("off", "none", "")
+
+        # Helper to calculate effective track size / duration with Smart Bitrate Capping
         def get_track_metric(local_trk: Dict) -> Tuple[int, int, bool]:
             orig_bytes = local_trk["size_bytes"]
             dur_s = local_trk["duration_s"] or 210
-            
-            will_trans = should_transcode_track(local_trk, squeeze_mode, target_mp3_kbps)
-            if will_trans:
-                est_bytes = int((dur_s * (target_mp3_kbps * 1000) / 8) + 65536)
+            is_lossless = local_trk.get("is_lossless", False)
+
+            if is_normalizing and cap_type == "bytes":
+                # Smart Bitrate Capping: normalized audio is re-encoded,
+                # but we never inflate a lower-bitrate source file.
+                if is_lossless:
+                    eff_kbps = target_mp3_kbps
+                else:
+                    src_kbps = get_track_bitrate_kbps(local_trk)
+                    eff_kbps = min(src_kbps, target_mp3_kbps)
+                est_bytes = int((dur_s * (eff_kbps * 1000) / 8) + 65536)
+                will_trans = True
             else:
-                est_bytes = orig_bytes
+                will_trans = should_transcode_track(local_trk, squeeze_mode, target_mp3_kbps)
+                if will_trans:
+                    est_bytes = int((dur_s * (target_mp3_kbps * 1000) / 8) + 65536)
+                else:
+                    est_bytes = orig_bytes
 
             if cap_type == "duration":
                 metric = int(dur_s)
@@ -1038,7 +1063,7 @@ class CDMixtapePlanner:
             trk["track_number"] = idx
             clean_art = sanitize_filename(clean_display_artist(trk["artist"]), 40)
             clean_title = sanitize_filename(clean_display_title(trk["title"]), 50)
-            target_ext = ".mp3" if trk["will_transcode"] else trk["ext"]
+            target_ext = ".mp3" if (trk["will_transcode"] or (is_normalizing and cap_type == "bytes")) else trk["ext"]
             trk["target_filename"] = f"{idx:03d} - {clean_art} - {clean_title}{target_ext}"
 
         total_duration_s = sum(t["duration_s"] for t in selected_tracks)
@@ -1096,11 +1121,13 @@ class CDMixtapeExporter:
         destination_dir: str,
         folder_name: str = "",
         mp3_bitrate_kbps: int = 320,
+        normalize_audio: str = "ebu_r128",
         progress_callback: Optional[Callable[[int, int, str, str], None]] = None
     ) -> Dict:
         """
         Executes non-destructive file copying and optional transcoding with 100% automated
-        car stereo ID3v2.3 metadata optimization (Ford SYNC compliant).
+        car stereo ID3v2.3 metadata optimization (Ford SYNC compliant) and optional
+        EBU R128 / ITU-R BS.1770 audio loudness normalization.
         """
         self._cancel_event.clear()
         tracks = mixtape_plan.get("selected_tracks", [])
@@ -1117,6 +1144,17 @@ class CDMixtapeExporter:
 
         target_folder = os.path.join(destination_dir, folder_name)
         os.makedirs(target_folder, exist_ok=True)
+
+        # Determine audio normalization filter
+        norm_filter = None
+        norm_label = ""
+        clean_norm = (normalize_audio or "").lower().strip()
+        if "ebu" in clean_norm or "14" in clean_norm or "balanced" in clean_norm:
+            norm_filter = "loudnorm=I=-14:TP=-1.0:LRA=11"
+            norm_label = "EBU R128 (-14 LUFS)"
+        elif "hifi" in clean_norm or "16" in clean_norm or "dynamic" in clean_norm:
+            norm_filter = "loudnorm=I=-16:TP=-1.0:LRA=11"
+            norm_label = "Car HiFi (-16 LUFS)"
 
         copied_count = 0
         transcoded_count = 0
@@ -1144,27 +1182,62 @@ class CDMixtapeExporter:
                 continue
 
             try:
-                if trk["will_transcode"]:
+                transcode_needed = trk.get("will_transcode", False)
+                norm_needed = bool(norm_filter)
+
+                if transcode_needed or norm_needed:
+                    if transcode_needed and norm_needed:
+                        status_desc = f"Normalizing ({norm_label}) & transcoding ({mp3_bitrate_kbps}k)..."
+                    elif norm_needed:
+                        status_desc = f"Normalizing levels ({norm_label})..."
+                    else:
+                        status_desc = f"Transcoding ({mp3_bitrate_kbps}k)..."
+
                     if progress_callback:
-                        progress_callback(idx, total_tracks, disp_title, f"Transcoding & optimizing tags ({mp3_bitrate_kbps}k)...")
-                    
+                        progress_callback(idx, total_tracks, disp_title, status_desc)
+
                     cmd = [
                         self.ffmpeg_path,
                         "-y",
                         "-i", src_file,
-                        "-vn",
-                        "-c:a", "libmp3lame",
-                        "-b:a", f"{mp3_bitrate_kbps}k",
-                        dst_file
+                        "-vn"
                     ]
-                    
+
+                    if norm_filter:
+                        cmd.extend(["-af", norm_filter])
+
+                    dst_ext = os.path.splitext(dst_filename)[1].lower()
+                    if dst_ext == ".mp3" or transcode_needed:
+                        # Smart Bitrate Capping: Never inflate an existing lower-bitrate lossy track
+                        if not trk.get("is_lossless", False):
+                            src_kbps = get_track_bitrate_kbps(trk)
+                            eff_kbps = min(src_kbps, mp3_bitrate_kbps)
+                        else:
+                            eff_kbps = mp3_bitrate_kbps
+                        cmd.extend(["-c:a", "libmp3lame", "-b:a", f"{eff_kbps}k"])
+                    elif dst_ext == ".flac":
+                        cmd.extend(["-c:a", "flac"])
+                    elif dst_ext in (".m4a", ".mp4", ".aac"):
+                        cmd.extend(["-c:a", "aac", "-b:a", f"{mp3_bitrate_kbps}k"])
+                    elif dst_ext in (".wav", ".aiff"):
+                        cmd.extend(["-c:a", "pcm_s16le"])
+                    else:
+                        if not trk.get("is_lossless", False):
+                            src_kbps = get_track_bitrate_kbps(trk)
+                            eff_kbps = min(src_kbps, mp3_bitrate_kbps)
+                        else:
+                            eff_kbps = mp3_bitrate_kbps
+                        cmd.extend(["-c:a", "libmp3lame", "-b:a", f"{eff_kbps}k"])
+
+                    cmd.append(dst_file)
+
                     res = subprocess.run(
                         cmd,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         creationflags=CREATION_FLAGS_BACKGROUND
                     )
-                    
+
                     if res.returncode == 0 and os.path.exists(dst_file):
                         transcoded_count += 1
                         # Automatically write car-optimized ID3v2.3 tags
@@ -1177,6 +1250,7 @@ class CDMixtapeExporter:
                             total_tracks=total_tracks
                         )
                     else:
+                        # Fallback to copy if FFmpeg returned an error
                         shutil.copy2(src_file, dst_file)
                         copied_count += 1
                         write_car_optimized_tags(
@@ -1222,6 +1296,7 @@ class CDMixtapeExporter:
         dur_str = summary.get("duration_str", "")
         total_mb = summary.get("total_mb", 0.0)
         
+        norm_note = f" &bull; {norm_label}" if norm_label else ""
         insert_html_path = os.path.join(target_folder, "CD_Jewel_Case_Insert.html")
         try:
             rows_html = ""
@@ -1281,7 +1356,7 @@ class CDMixtapeExporter:
   <div class="case-insert">
     <div class="header">
       <div class="title-main">{html.escape(seed_name)} &amp; VIBES</div>
-      <div class="subtitle">Custom CD Mixtape &bull; {len(tracks)} Tracks &bull; {dur_str} &bull; {total_mb:.1f} MB</div>
+      <div class="subtitle">Custom CD Mixtape &bull; {len(tracks)} Tracks &bull; {dur_str} &bull; {total_mb:.1f} MB{norm_note}</div>
     </div>
     <table>
       <thead>

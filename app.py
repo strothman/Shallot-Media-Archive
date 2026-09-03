@@ -12,7 +12,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional, Tuple, Callable, Any
+from typing import Dict, List
 
 # Ensure Windows Taskbar displays the dedicated app icon instead of generic python icon
 if sys.platform.startswith("win"):
@@ -2256,9 +2256,34 @@ class DownloaderApp(ctk.CTk):
         self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_bitrate_menu)
 
-        # Row 1, Col 2: Track Ordering & Mix Flow
+        # Row 1, Col 2: Audio Normalization
+        f_norm = ctk.CTkFrame(cd_grid, fg_color="transparent")
+        f_norm.grid(row=1, column=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        lbl_norm = ctk.CTkLabel(f_norm, text="Audio Normalization", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_norm.pack(anchor="w")
+        self.theme_labels_secondary.append(lbl_norm)
+        self.cd_normalization_menu = ctk.CTkOptionMenu(
+            f_norm,
+            values=[
+                "EBU R128 (-14 LUFS - Balanced)",
+                "Car HiFi (-16 LUFS - Dynamic)",
+                "Off (Original File Volumes)"
+            ],
+            height=28,
+            font=("Segoe UI", 10),
+            command=lambda v: self.save_setting("cd_audio_normalization", v)
+        )
+        saved_norm = self.saved_settings.get("cd_audio_normalization", "EBU R128 (-14 LUFS - Balanced)")
+        if saved_norm in self.cd_normalization_menu._values:
+            self.cd_normalization_menu.set(saved_norm)
+        else:
+            self.cd_normalization_menu.set("EBU R128 (-14 LUFS - Balanced)")
+        self.cd_normalization_menu.pack(fill="x", pady=(1, 0))
+        self.theme_option_menus.append(self.cd_normalization_menu)
+
+        # Row 1, Col 3: Track Ordering & Mix Flow
         f_style = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_style.grid(row=1, column=2, sticky="ew", padx=(0, 6), pady=(3, 0))
+        f_style.grid(row=1, column=3, sticky="ew", pady=(3, 0))
         lbl_style = ctk.CTkLabel(f_style, text="Mixtape Flow & Sequencing", font=("Segoe UI", 9, "bold"), text_color="#78909C")
         lbl_style.pack(anchor="w")
         self.theme_labels_secondary.append(lbl_style)
@@ -2275,17 +2300,15 @@ class DownloaderApp(ctk.CTk):
         self.cd_mix_style_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_mix_style_menu)
 
-        # Row 1, Col 3: Generate Button
+        # Row 2: Generate Button
         f_btn_box = ctk.CTkFrame(cd_grid, fg_color="transparent")
-        f_btn_box.grid(row=1, column=3, sticky="ew", pady=(3, 0))
-        lbl_blank = ctk.CTkLabel(f_btn_box, text=" ", font=("Segoe UI", 9))
-        lbl_blank.pack(anchor="w")
+        f_btn_box.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(8, 2))
 
         self.btn_cd_generate = ctk.CTkButton(
             f_btn_box,
             text="⚡ Generate & Pack Mixtape",
             font=("Segoe UI", 11, "bold"),
-            height=28,
+            height=30,
             corner_radius=6,
             command=self.start_cd_mixtape_generation
         )
@@ -5775,6 +5798,14 @@ class DownloaderApp(ctk.CTk):
         else:
             mix_style = "chaos_shuffle"
 
+        raw_norm = self.cd_normalization_menu.get().lower() if hasattr(self, 'cd_normalization_menu') else "ebu"
+        if "off" in raw_norm or "none" in raw_norm:
+            norm_mode = "off"
+        elif "hifi" in raw_norm or "16" in raw_norm:
+            norm_mode = "car_hifi"
+        else:
+            norm_mode = "ebu_r128"
+
         self.btn_cd_generate.configure(state="disabled", text="Generating...")
         self.btn_cd_export.configure(state="disabled")
         self.cd_export_status_lbl.configure(text="🎲 Rolling library & packing optimal mixtape capacity...", text_color="#38BDF8")
@@ -5805,6 +5836,7 @@ class DownloaderApp(ctk.CTk):
                     max_song_duration_s=max_dur_s,
                     squeeze_mode=squeeze_mode,
                     mix_style=mix_style,
+                    normalize_audio=norm_mode,
                     progress_callback=lambda msg: self.after(0, lambda m=msg: self.cd_export_status_lbl.configure(text=m, text_color="#38BDF8"))
                 )
                 self.cd_mixtape_plan = plan
@@ -5830,7 +5862,6 @@ class DownloaderApp(ctk.CTk):
         tracks = plan.get("selected_tracks", [])
 
         total_mb = summary.get("total_mb", 0.0)
-        target_mb = summary.get("target_mb", 700.0)
         util_pct = summary.get("utilization_pct", 0.0)
         disp_limit = summary.get("display_limit", "700 MB")
         dur_str = summary.get("duration_str", "0m 00s")
@@ -5945,6 +5976,14 @@ class DownloaderApp(ctk.CTk):
         m_br = re.search(r'\d+', raw_br)
         bitrate_kbps = int(m_br.group()) if m_br else 256
 
+        raw_norm = self.cd_normalization_menu.get().lower() if hasattr(self, 'cd_normalization_menu') else "ebu"
+        if "off" in raw_norm or "none" in raw_norm:
+            norm_mode = "off"
+        elif "hifi" in raw_norm or "16" in raw_norm:
+            norm_mode = "car_hifi"
+        else:
+            norm_mode = "ebu_r128"
+
         self.btn_cd_export.configure(state="disabled", text="Exporting...")
         self.btn_cd_generate.configure(state="disabled")
         self.cd_is_exporting = True
@@ -5963,6 +6002,7 @@ class DownloaderApp(ctk.CTk):
                     mixtape_plan=self.cd_mixtape_plan,
                     destination_dir=dest_dir,
                     mp3_bitrate_kbps=bitrate_kbps,
+                    normalize_audio=norm_mode,
                     progress_callback=on_export_progress
                 )
                 self.after(0, lambda: self._on_cd_export_complete(res))
@@ -5993,7 +6033,7 @@ class DownloaderApp(ctk.CTk):
             copied = res.get("copied_count", 0)
             transcoded = res.get("transcoded_count", 0)
             self.cd_export_status_lbl.configure(
-                text=f"✓ CD Mixtape ready! ({copied} copied, {transcoded} transcoded). M3U playlist generated.",
+                text=f"✓ CD Mixtape ready! ({copied} copied, {transcoded} normalized/transcoded). M3U playlist generated.",
                 text_color="#4ADE80"
             )
             self.log(f"CD Burn folder ready at: {folder}")
@@ -6029,6 +6069,10 @@ class DownloaderApp(ctk.CTk):
                 val = self.cd_output_folder_input.get().strip()
                 if val:
                     self.save_setting("cd_output_folder", val)
+            if hasattr(self, 'cd_normalization_menu'):
+                val = self.cd_normalization_menu.get().strip()
+                if val:
+                    self.save_setting("cd_audio_normalization", val)
         except Exception:
             pass
 

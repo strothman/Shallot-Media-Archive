@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Last Updated](https://img.shields.io/badge/last%20updated-2026--09--02-success.svg)](CHANGELOG.md)
+[![Last Updated](https://img.shields.io/badge/last%20updated-2026--09--03-success.svg)](CHANGELOG.md)
 
 **SMArchive** is a high-performance, dark-themed desktop media archiving suite designed for downloading video and audio from online sources, managing YouTube media libraries, and synchronizing Spotify playlists directly into **Plex / Plexamp** with automated ID3/FLAC metadata tagging, high-resolution album artwork embedding, and standard folder organization.
 

@@ -65,6 +65,10 @@ SUPPORTED_AUDIO_EXTENSIONS = {
     ".mp3", ".flac", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".alac"
 }
 
+VALID_CACHE_STATUSES = {
+    "VERIFIED", "MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH", "UNRECOGNIZED"
+}
+
 
 def normalize_text(text: str) -> str:
     """Normalizes string for fuzzy comparison by removing noise, feats, remasters, punctuation."""
@@ -167,8 +171,9 @@ def fetch_reference_metadata(artist: str, title: str) -> Optional[Dict]:
 
 
 def slice_audio_segment(file_path: str, offset_seconds: float = 30.0, duration_seconds: float = 12.0) -> Optional[bytes]:
-    """Extracts a slice from file_path as uncompressed wav bytes using bundled ffmpeg for deep acoustic scanning."""
-    if not os.path.exists(file_path):
+    """Extracts a slice from file_path as MP3 bytes using bundled ffmpeg for fast acoustic scanning."""
+    norm_path = os.path.normpath(file_path)
+    if not os.path.exists(norm_path):
         return None
     try:
         ffmpeg_bin = os.path.join(base_dir, "ffmpeg.exe") if os.path.exists(os.path.join(base_dir, "ffmpeg.exe")) else "ffmpeg"
@@ -179,8 +184,10 @@ def slice_audio_segment(file_path: str, offset_seconds: float = 30.0, duration_s
             "-loglevel", "error",
             "-ss", f"{max(0.0, offset_seconds):.2f}",
             "-t", f"{duration_seconds:.2f}",
-            "-i", file_path,
-            "-f", "wav",
+            "-i", norm_path,
+            "-f", "mp3",
+            "-ac", "2",
+            "-ar", "44100",
             "pipe:1"
         ]
         flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
@@ -625,8 +632,7 @@ class AudioFactChecker:
                     mtime_diff = abs(entry.get("mtime", 0) - st.st_mtime)
                     if mtime_diff <= 2.0 and entry.get("size") == st.st_size:
                         c_res = entry.get("result", {})
-                        valid_statuses = ("VERIFIED", "MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH", "UNRECOGNIZED")
-                        if c_res.get("status") in valid_statuses:
+                        if c_res.get("status") in VALID_CACHE_STATUSES:
                             results.append(c_res)
                             completed_count += 1
                             cached_count += 1
@@ -668,40 +674,56 @@ class AudioFactChecker:
             if active_worker_cb:
                 active_worker_cb(snapshot)
 
-            res = cls.verify_single_file(file_path, timeout=per_file_timeout, log_cb=log_cb)
-
-            with lock:
-                active_workers.pop(tid, None)
-                completed_count += 1
-                curr_c = completed_count
-                results.append(res)
-                snapshot = {k: v.copy() for k, v in active_workers.items()}
-
-                # Store in persistent cache
-                if use_cache and res.get("status") in valid_statuses:
-                    try:
-                        st = os.stat(file_path)
-                        cache[file_path] = {
-                            "mtime": st.st_mtime,
-                            "size": st.st_size,
-                            "result": res
-                        }
-                    except Exception:
-                        pass
-
-            if progress_cb:
-                progress_cb(curr_c, total_files, filename)
-
-            if item_cb:
-                item_cb(res)
-
-            if active_worker_cb:
-                active_worker_cb(snapshot)
-
-            # Periodically flush cache to disk every 2 completed tracks
-            if use_cache and curr_c % 2 == 0:
+            res = None
+            try:
+                res = cls.verify_single_file(file_path, timeout=per_file_timeout, log_cb=log_cb)
+            except Exception as e:
+                res = {
+                    "file_path": file_path,
+                    "filename": filename,
+                    "status": "ERROR",
+                    "discrepancy_reason": f"Verification error: {e}",
+                    "artist_similarity": 0.0,
+                    "title_similarity": 0.0,
+                    "current": {},
+                    "recognized": {"matched": False},
+                    "reference": None
+                }
+                if log_cb:
+                    log_cb(f"Error analyzing {filename}: {e}", True)
+            finally:
                 with lock:
-                    cls.save_cache(cache)
+                    active_workers.pop(tid, None)
+                    completed_count += 1
+                    curr_c = completed_count
+                    results.append(res)
+                    snapshot = {k: v.copy() for k, v in active_workers.items()}
+
+                    # Store in persistent cache
+                    if use_cache and res and res.get("status") in VALID_CACHE_STATUSES:
+                        try:
+                            st = os.stat(file_path)
+                            cache[file_path] = {
+                                "mtime": st.st_mtime,
+                                "size": st.st_size,
+                                "result": res
+                            }
+                        except Exception:
+                            pass
+
+                if progress_cb:
+                    progress_cb(curr_c, total_files, filename)
+
+                if item_cb and res:
+                    item_cb(res)
+
+                if active_worker_cb:
+                    active_worker_cb(snapshot)
+
+                # Periodically flush cache to disk every 2 completed tracks
+                if use_cache and curr_c % 2 == 0:
+                    with lock:
+                        cls.save_cache(cache)
 
             return res
 

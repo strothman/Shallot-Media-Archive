@@ -5217,11 +5217,13 @@ class DownloaderApp(ctk.CTk):
         self.verifier_lbl_verified.configure(text="0 ✅ Verified")
         self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
 
+        scan_start_time = time.time()
+
         def log_cb(msg: str, is_error: bool = False):
-            self.log(f"[Fact-Checker] {msg}", is_error=is_error)
+            self.after(0, lambda m=msg, err=is_error: self.log(f"[Fact-Checker] {m}", is_error=err))
 
         def active_worker_cb(workers: dict):
-            self.verifier_active_workers = workers
+            self.verifier_active_workers = dict(workers)
             self.after(0, update_workers_display)
 
         def update_workers_display():
@@ -5234,12 +5236,13 @@ class DownloaderApp(ctk.CTk):
 
             worker_strs = []
             now = time.time()
-            for idx, info in enumerate(self.verifier_active_workers.values(), start=1):
+            workers_list = list(self.verifier_active_workers.values())
+            for idx, info in enumerate(workers_list, start=1):
                 fn = info.get("filename", "")
                 if len(fn) > 28:
                     fn = fn[:25] + "..."
                 elapsed = int(now - info.get("start_time", now))
-                warn = " ⚠️" if elapsed >= 10 else ""
+                warn = " ⚠️" if elapsed >= 15 else ""
                 worker_strs.append(f"W{idx}: {fn} ({elapsed}s{warn})")
 
             disp_text = "⚡ Active: " + "  |  ".join(worker_strs)
@@ -5247,8 +5250,16 @@ class DownloaderApp(ctk.CTk):
 
         def heartbeat_loop():
             if self.verifier_is_scanning:
-                update_workers_display()
+                try:
+                    update_workers_display()
+                except Exception:
+                    pass
                 self.after(500, heartbeat_loop)
+
+        def fmt_time(seconds: int) -> str:
+            m, s = divmod(max(0, int(seconds)), 60)
+            h, m = divmod(m, 60)
+            return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
         def progress_cb(curr: int, total: int, filename: str):
             pct = curr / max(1, total)
@@ -5257,7 +5268,14 @@ class DownloaderApp(ctk.CTk):
             if curr == 0:
                 self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Analyzing {total} audio files...", text_color="#38BDF8"))
             else:
-                self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Acoustic Check ({curr}/{total}): {filename[:45]}", text_color="#E0F2FE"))
+                elapsed_s = time.time() - scan_start_time
+                avg_track_s = elapsed_s / max(1, curr)
+                eta_s = int(avg_track_s * max(0, total - curr))
+                time_str = f"⏱️ {fmt_time(elapsed_s)} | ETA: {fmt_time(eta_s)}"
+                self.after(0, lambda t=time_str, fn=filename: self.verifier_status_lbl.configure(
+                    text=f"Acoustic Check ({curr}/{total}) • {t} • {fn[:35]}",
+                    text_color="#E0F2FE"
+                ))
             self.after(0, lambda: self.update_taskbar_progress(int(pct * 100)))
 
         def item_cb(res: dict):

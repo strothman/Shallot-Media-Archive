@@ -1217,8 +1217,58 @@ class SpotifyPlexampPipeline:
                         except Exception:
                             pass
 
-            # 2. Search and Download from YouTube
-            search_query = f"{t_artist} - {t_title} audio"
+            # 2. Search and Download from YouTube with Duration-Matched Official Search
+            target_dur_s = (track.get("duration_ms", 0) / 1000.0) if track.get("duration_ms") else 0.0
+            search_query = f'"{t_artist}" "{t_title}" official audio'
+            chosen_video_target = None
+
+            # Attempt to inspect candidates to avoid viral covers, skits, or wrong songs
+            try:
+                insp_cmd = [
+                    self.yt_dlp_path,
+                    "--dump-json",
+                    "--flat-playlist",
+                    "--default-search", "ytsearch5",
+                    search_query
+                ] + self.cookie_args
+                insp_proc = subprocess.run(
+                    insp_cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=CREATION_FLAGS_BACKGROUND,
+                    timeout=12
+                )
+                best_diff = 9999.0
+                for line in insp_proc.stdout.strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    try:
+                        c_info = json.loads(line)
+                        c_id = c_info.get("id")
+                        c_title = (c_info.get("title") or "").lower()
+                        c_dur = c_info.get("duration") or 0
+
+                        # Filter out covers, karaoke, reaction
+                        if "cover" in c_title and "cover" not in t_title.lower():
+                            continue
+                        if "karaoke" in c_title or "reaction" in c_title or "instrumental" in c_title:
+                            continue
+
+                        if target_dur_s > 0 and c_dur > 0:
+                            diff = abs(c_dur - target_dur_s)
+                            if diff < best_diff and diff <= 12.0:
+                                best_diff = diff
+                                chosen_video_target = f"https://www.youtube.com/watch?v={c_id}"
+                        elif not chosen_video_target:
+                            chosen_video_target = f"https://www.youtube.com/watch?v={c_id}"
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            if not chosen_video_target:
+                chosen_video_target = f"ytsearch1:{search_query}"
+
             ext = "flac" if "flac" in audio_format.lower() else ("m4a" if "m4a" in audio_format.lower() else "mp3")
             temp_output_template = os.path.join(temp_dir, f"dl_{seq_idx}_%(id)s.%(ext)s")
             aq = "0" if "flac" in audio_format.lower() or "320" in audio_format.lower() else "5"
@@ -1234,7 +1284,7 @@ class SpotifyPlexampPipeline:
                 "--audio-format", ext,
                 "--audio-quality", aq,
                 "-o", temp_output_template,
-                f"ytsearch1:{search_query}"
+                chosen_video_target
             ] + self.cookie_args
 
             try:

@@ -31,10 +31,20 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+import subprocess
+import ssl
+import urllib.parse
+import urllib.request
+
 # Ensure local ffmpeg.exe is in PATH
 base_dir = os.path.dirname(os.path.abspath(__file__))
 if base_dir not in [os.path.abspath(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]:
     os.environ["PATH"] = base_dir + os.pathsep + os.environ.get("PATH", "")
+
+CREATION_FLAGS_BACKGROUND = (
+    (subprocess.CREATE_NO_WINDOW | 0x00004000)
+    if os.name == 'nt' else 0
+)
 
 import mutagen  # noqa: E402
 from spotify_sync import (  # noqa: E402
@@ -126,6 +136,89 @@ def string_similarity(s1: str, s2: str) -> float:
     return len(intersection) / len(union)
 
 
+def fetch_reference_metadata(artist: str, title: str) -> Optional[Dict]:
+    """Queries iTunes Catalog API for canonical studio track info and duration in ms."""
+    if not artist or not title:
+        return None
+    try:
+        clean_t = re.sub(r'\s*-\s*(Remastered|Remaster|Live|Single Version).*$', '', title, flags=re.IGNORECASE).strip()
+        query = f"{artist} {clean_t}"
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&entity=song&limit=3"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, context=ctx, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            results = data.get("results", [])
+            if results:
+                top = results[0]
+                return {
+                    "artist": top.get("artistName", ""),
+                    "title": top.get("trackName", ""),
+                    "album": top.get("collectionName", ""),
+                    "duration_ms": int(top.get("trackTimeMillis", 0)),
+                    "release_date": top.get("releaseDate", "")[:10],
+                    "cover_url": (top.get("artworkUrl100") or "").replace("100x100bb", "640x640bb")
+                }
+    except Exception:
+        pass
+    return None
+
+
+def slice_audio_segment(file_path: str, offset_seconds: float = 30.0, duration_seconds: float = 12.0) -> Optional[bytes]:
+    """Extracts a slice from file_path as uncompressed wav bytes using bundled ffmpeg for deep acoustic scanning."""
+    if not os.path.exists(file_path):
+        return None
+    try:
+        ffmpeg_bin = os.path.join(base_dir, "ffmpeg.exe") if os.path.exists(os.path.join(base_dir, "ffmpeg.exe")) else "ffmpeg"
+        cmd = [
+            ffmpeg_bin,
+            "-threads", "2",
+            "-nostats",
+            "-loglevel", "error",
+            "-ss", f"{max(0.0, offset_seconds):.2f}",
+            "-t", f"{duration_seconds:.2f}",
+            "-i", file_path,
+            "-f", "wav",
+            "pipe:1"
+        ]
+        flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        proc = subprocess.run(cmd, capture_output=True, creationflags=flags, timeout=12)
+        if proc.returncode == 0 and len(proc.stdout) > 1000:
+            return proc.stdout
+    except Exception:
+        pass
+    return None
+
+
+# Trackable error logging & Shazam rate-limit pacing
+_shazam_rate_lock = threading.Lock()
+_last_shazam_request_time = 0.0
+
+def log_fact_checker_error(file_path: str, error_type: str, details: str):
+    """Appends error events to a persistent trackable fact_checker_errors.log file."""
+    try:
+        log_path = os.path.join(base_dir, "fact_checker_errors.log")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] [{error_type}] {os.path.basename(file_path)}\n")
+            f.write(f"    Path: {file_path}\n")
+            f.write(f"    Detail: {details}\n\n")
+    except Exception:
+        pass
+
+def pace_shazam_request(min_interval: float = 0.9):
+    """Ensures at least min_interval seconds between consecutive Shazam API queries across all threads."""
+    global _last_shazam_request_time
+    with _shazam_rate_lock:
+        now = time.time()
+        elapsed = now - _last_shazam_request_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        _last_shazam_request_time = time.time()
+
+
 class AudioFactChecker:
     """Acoustic recognition, library verification, and fact-checking engine."""
 
@@ -201,102 +294,144 @@ class AudioFactChecker:
         return metadata
 
     @classmethod
-    async def recognize_audio_async(cls, file_path: str, timeout: float = 25.0) -> Dict:
-        """Runs acoustic waveform recognition via Shazam with timeout protection and retry."""
+    async def recognize_audio_async(cls, file_path: str, timeout: float = 12.0, deep_scan: bool = True) -> Dict:
+        """Runs acoustic waveform recognition via Shazam with pacing, rate-limit protection, and mid-track sweet-spot sampling."""
         if not HAS_SHAZAM:
             return {"matched": False, "error": "shazamio package is not installed"}
 
-        if not os.path.exists(file_path):
+        norm_path = os.path.normpath(file_path)
+        if not os.path.exists(norm_path):
+            log_fact_checker_error(norm_path, "FILE_NOT_FOUND", "Audio file could not be accessed.")
             return {"matched": False, "error": f"File not found: {file_path}"}
 
         shazam = Shazam()
-        for attempt in range(2):
+
+        # Enforce rate-limit pacing so Apple/Shazam never triggers HTTP 429
+        pace_shazam_request(min_interval=0.9)
+
+        # Get file duration to find optimal acoustic sweet-spot
+        file_duration_s = 0.0
+        try:
+            aud = mutagen.File(norm_path)
+            if aud and aud.info and hasattr(aud.info, "length"):
+                file_duration_s = float(aud.info.length)
+        except Exception:
+            pass
+
+        track = {}
+        # 1. Fast slice recognition (extracts 11s snippet at ~25% or 20s in - finishes in <0.5s)
+        first_offset = max(8.0, min(file_duration_s * 0.25, file_duration_s - 15.0)) if file_duration_s > 20.0 else 10.0
+        slice_bytes = slice_audio_segment(norm_path, offset_seconds=first_offset, duration_seconds=11.0)
+        if slice_bytes:
             try:
-                out = await asyncio.wait_for(shazam.recognize(file_path), timeout=timeout)
+                out = await asyncio.wait_for(shazam.recognize(slice_bytes), timeout=6.0)
                 track = out.get("track", {})
-                if not track or not track.get("title"):
-                    return {
-                        "matched": False,
-                        "title": "",
-                        "artist": "",
-                        "album": "",
-                        "year": "",
-                        "genre": "",
-                        "cover_url": "",
-                        "raw": out
-                    }
-
-                title = track.get("title", "")
-                artist = track.get("subtitle", "")
-                album = ""
-                year = ""
-                label = ""
-                cover_url = track.get("images", {}).get("coverarthq") or track.get("images", {}).get("coverart") or ""
-
-                genres = track.get("genres", {})
-                genre = genres.get("primary", "") if isinstance(genres, dict) else ""
-
-                sections = track.get("sections", [])
-                for sec in sections:
-                    if sec.get("type") == "SONG":
-                        for meta in sec.get("metadata", []):
-                            m_title = (meta.get("title") or "").strip().lower()
-                            m_text = (meta.get("text") or "").strip()
-                            if m_title == "album":
-                                album = m_text
-                            elif m_title == "released":
-                                year = m_text[:4] if len(m_text) >= 4 else m_text
-                            elif m_title == "label":
-                                label = m_text
-
-                if not album:
-                    album = title
-
-                return {
-                    "matched": True,
-                    "title": title,
-                    "artist": artist,
-                    "album": album,
-                    "year": year,
-                    "genre": genre,
-                    "label": label,
-                    "cover_url": cover_url,
-                    "shazam_id": track.get("key", ""),
-                    "raw": track
-                }
-            except asyncio.TimeoutError:
-                if attempt == 0:
-                    await asyncio.sleep(1.0)
-                    continue
-                return {
-                    "matched": False,
-                    "error": f"Recognition timed out after {int(timeout)}s (network or server delay)"
-                }
+            except (asyncio.TimeoutError, TimeoutError):
+                pass
             except Exception as e:
-                if attempt == 0 and "429" in str(e):
-                    await asyncio.sleep(2.0)
-                    continue
-                return {
-                    "matched": False,
-                    "error": str(e)
-                }
+                err_str = str(e)
+                if "429" in err_str:
+                    log_fact_checker_error(norm_path, "RATE_LIMIT_429", "Shazam API rate limit reached (HTTP 429). Cooldown required.")
+                    return {"matched": False, "error": "Shazam rate limit (HTTP 429). Temporary cooldown required."}
+                else:
+                    log_fact_checker_error(norm_path, "RECOGNIZE_ERROR", err_str)
 
-        return {"matched": False, "error": f"Recognition timed out after {int(timeout)}s"}
+        # 2. Deep mid-track sampling if first slice didn't match (sample chorus at 50%)
+        if (not track or not track.get("title")) and deep_scan and file_duration_s > 30.0:
+            second_offset = max(15.0, min(file_duration_s * 0.50, file_duration_s - 15.0))
+            slice_bytes2 = slice_audio_segment(norm_path, offset_seconds=second_offset, duration_seconds=11.0)
+            if slice_bytes2:
+                try:
+                    pace_shazam_request(min_interval=0.9)
+                    out2 = await asyncio.wait_for(shazam.recognize(slice_bytes2), timeout=6.0)
+                    t2 = out2.get("track", {})
+                    if t2 and t2.get("title"):
+                        track = t2
+                except Exception:
+                    pass
+
+        # 3. Fallback to whole-file recognition only if slicing produced no audio bytes
+        if (not track or not track.get("title")) and not slice_bytes:
+            try:
+                out_full = await asyncio.wait_for(shazam.recognize(norm_path), timeout=8.0)
+                track = out_full.get("track", {})
+            except Exception:
+                pass
+
+        if not track or not track.get("title"):
+            return {
+                "matched": False,
+                "title": "",
+                "artist": "",
+                "album": "",
+                "year": "",
+                "genre": "",
+                "cover_url": "",
+                "raw": {}
+            }
+
+        title = track.get("title", "")
+        artist = track.get("subtitle", "")
+        album = ""
+        year = ""
+        label = ""
+        cover_url = track.get("images", {}).get("coverarthq") or track.get("images", {}).get("coverart") or ""
+
+        genres = track.get("genres", {})
+        genre = genres.get("primary", "") if isinstance(genres, dict) else ""
+
+        sections = track.get("sections", [])
+        for sec in sections:
+            if sec.get("type") == "SONG":
+                for meta in sec.get("metadata", []):
+                    m_title = (meta.get("title") or "").strip().lower()
+                    m_text = (meta.get("text") or "").strip()
+                    if m_title == "album":
+                        album = m_text
+                    elif m_title == "released":
+                        year = m_text[:4] if len(m_text) >= 4 else m_text
+                    elif m_title == "label":
+                        label = m_text
+
+        if not album:
+            album = title
+
+        return {
+            "matched": True,
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "year": year,
+            "genre": genre,
+            "label": label,
+            "cover_url": cover_url,
+            "shazam_id": track.get("key", ""),
+            "raw": track
+        }
 
     @classmethod
     def verify_single_file(
         cls,
         file_path: str,
-        timeout: float = 20.0,
+        timeout: float = 12.0,
+        deep_scan: bool = True,
         log_cb: Optional[Callable[[str, bool], None]] = None
     ) -> Dict:
-        """Synchronously verifies a single file, comparing embedded tags vs audio match."""
+        """Synchronously verifies a single file, comparing embedded tags vs audio match and reference metadata."""
         filename = os.path.basename(file_path)
-        embedded = cls.extract_embedded_metadata(file_path)
+        norm_path = os.path.normpath(file_path)
+        embedded = cls.extract_embedded_metadata(norm_path)
         
-        # Run recognition with strict timeout
+        # Run recognition with strict timeout protection
         try:
-            rec_result = asyncio.run(cls.recognize_audio_async(file_path, timeout=timeout))
+            rec_result = asyncio.run(
+                asyncio.wait_for(
+                    cls.recognize_audio_async(norm_path, timeout=timeout, deep_scan=deep_scan),
+                    timeout=timeout + 2.0
+                )
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            rec_result = {"matched": False, "error": f"Audio recognition timed out after {int(timeout)}s"}
         except Exception as e:
             rec_result = {"matched": False, "error": str(e)}
 
@@ -304,6 +439,7 @@ class AudioFactChecker:
         discrepancy_reason = ""
         artist_sim = 0.0
         title_sim = 0.0
+        ref_meta = None
 
         if rec_result.get("error"):
             err_msg = rec_result.get("error", "Unknown error")
@@ -324,12 +460,48 @@ class AudioFactChecker:
             artist_sim = string_similarity(e_artist, v_artist)
             title_sim = string_similarity(e_title, v_title)
 
-            # Match criteria
-            if artist_sim >= 0.70 and title_sim >= 0.65:
-                status = "VERIFIED"
-                discrepancy_reason = "Audio matches current tags"
+            # Check reference metadata from iTunes catalog
+            ref_meta = fetch_reference_metadata(e_artist, e_title)
+            ref_dur_ms = ref_meta.get("duration_ms", 0) if ref_meta else 0
+            file_dur_ms = embedded.get("duration_ms", 0)
+            dur_diff_s = abs(file_dur_ms - ref_dur_ms) / 1000.0 if (file_dur_ms > 0 and ref_dur_ms > 0) else 0.0
+
+            # 1. Cover Detection:
+            # Song title matches closely, but singing artist differs completely,
+            # or recognized title explicitly denotes a cover/tribute
+            is_cover = False
+            if title_sim >= 0.65 and artist_sim < 0.60:
+                is_cover = True
+            elif "cover" in v_title.lower() or "tribute" in v_title.lower() or "acoustic version" in v_title.lower():
+                if "cover" not in e_title.lower():
+                    is_cover = True
+
+            if is_cover:
+                status = "COVER_DETECTED"
+                discrepancy_reason = f"Cover version detected: Audio performed by '{v_artist}', but tagged as '{e_artist}'"
                 if log_cb:
-                    log_cb(f"[VERIFIED] {filename} -> '{v_artist} - {v_title}'", False)
+                    log_cb(f"[COVER] {filename} | Tag: '{e_artist} - {e_title}' | Audio Singer: '{v_artist}'", True)
+            elif artist_sim < 0.50 and title_sim < 0.50:
+                status = "WRONG_TRACK"
+                discrepancy_reason = f"Completely wrong audio: Tag '{e_artist} - {e_title}' vs Audio '{v_artist} - {v_title}'"
+                if log_cb:
+                    log_cb(f"[WRONG AUDIO] {filename} | Tag: '{e_artist} - {e_title}' | Audio: '{v_artist} - {v_title}'", True)
+            elif artist_sim >= 0.70 and (0.40 <= title_sim < 0.65):
+                status = "METADATA_TYPO"
+                discrepancy_reason = f"Tag title variation/typo: Tag '{e_title}' vs Audio '{v_title}'"
+                if log_cb:
+                    log_cb(f"[TYPO] {filename} | Tag: '{e_title}' vs Audio: '{v_title}'", False)
+            elif artist_sim >= 0.70 and title_sim >= 0.65:
+                if dur_diff_s >= 25.0:
+                    status = "DURATION_MISMATCH"
+                    discrepancy_reason = f"Duration mismatch: File is {int(file_dur_ms/1000)}s vs Studio {int(ref_dur_ms/1000)}s (likely music video with skits or live version)"
+                    if log_cb:
+                        log_cb(f"[DURATION] {filename} | Length diff: {int(dur_diff_s)}s (likely video skit)", True)
+                else:
+                    status = "VERIFIED"
+                    discrepancy_reason = "Audio matches current tags"
+                    if log_cb:
+                        log_cb(f"[VERIFIED] {filename} -> '{v_artist} - {v_title}'", False)
             else:
                 status = "MISMATCH"
                 reasons = []
@@ -354,7 +526,8 @@ class AudioFactChecker:
             "artist_similarity": round(artist_sim, 2),
             "title_similarity": round(title_sim, 2),
             "current": embedded,
-            "recognized": rec_result
+            "recognized": rec_result,
+            "reference": ref_meta
         }
 
     @classmethod
@@ -430,6 +603,11 @@ class AudioFactChecker:
         lock = threading.Lock()
         active_workers: Dict[int, Dict] = {}
 
+        if log_cb:
+            log_cb(f"Discovered {total_files} audio files. Checking fast resume cache...", False)
+        if progress_cb:
+            progress_cb(0, total_files, f"Discovered {total_files} audio files. Checking cache...")
+
         # 1. Check persistent cache for fast resume
         cache = cls.load_cache() if use_cache else {}
         unscanned_files = []
@@ -447,7 +625,8 @@ class AudioFactChecker:
                     mtime_diff = abs(entry.get("mtime", 0) - st.st_mtime)
                     if mtime_diff <= 2.0 and entry.get("size") == st.st_size:
                         c_res = entry.get("result", {})
-                        if c_res.get("status") in ("VERIFIED", "MISMATCH", "UNRECOGNIZED"):
+                        valid_statuses = ("VERIFIED", "MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH", "UNRECOGNIZED")
+                        if c_res.get("status") in valid_statuses:
                             results.append(c_res)
                             completed_count += 1
                             cached_count += 1
@@ -499,7 +678,7 @@ class AudioFactChecker:
                 snapshot = {k: v.copy() for k, v in active_workers.items()}
 
                 # Store in persistent cache
-                if use_cache and res.get("status") in ("VERIFIED", "MISMATCH", "UNRECOGNIZED"):
+                if use_cache and res.get("status") in valid_statuses:
                     try:
                         st = os.stat(file_path)
                         cache[file_path] = {
@@ -700,6 +879,266 @@ class AudioFactChecker:
                     pass
 
     @classmethod
+    def redownload_track_audio(
+        cls,
+        file_path: str,
+        intended_artist: str,
+        intended_title: str,
+        intended_album: str = "",
+        destination_root: Optional[str] = None,
+        reorganize: bool = False,
+        progress_cb: Optional[Callable[[str], None]] = None
+    ) -> Dict:
+        """
+        Re-downloads authentic studio audio for a track using strict duration matching and official audio query,
+        tags with Plexamp metadata, lyrics, and ReplayGain, and atomically replaces the file.
+        """
+        if not os.path.exists(file_path):
+            return {"success": False, "error": f"File does not exist: {file_path}"}
+
+        ext = os.path.splitext(file_path)[1].lstrip('.').lower() or "mp3"
+        if progress_cb:
+            progress_cb(f"Searching official studio audio: {intended_artist} - {intended_title}...")
+
+        # 1. Fetch reference duration and canonical metadata from iTunes
+        ref = fetch_reference_metadata(intended_artist, intended_title)
+        target_dur_s = (ref.get("duration_ms", 0) / 1000.0) if ref else 0.0
+        ref_album = ref.get("album") if (ref and ref.get("album")) else (intended_album or intended_title)
+        ref_year = ref.get("release_date", "")[:4] if ref else ""
+        ref_cover = ref.get("cover_url", "") if ref else ""
+
+        yt_dlp_bin = os.path.join(base_dir, "yt-dlp.exe") if os.path.exists(os.path.join(base_dir, "yt-dlp.exe")) else "yt-dlp"
+        flags = CREATION_FLAGS_BACKGROUND
+
+        # 2. Search candidates via yt-dlp flat-playlist
+        search_query = f'"{intended_artist}" "{intended_title}" official audio'
+        chosen_id = None
+
+        try:
+            inspect_cmd = [
+                yt_dlp_bin,
+                "--dump-json",
+                "--flat-playlist",
+                "--default-search", "ytsearch5",
+                search_query
+            ]
+            res = subprocess.run(inspect_cmd, capture_output=True, text=True, creationflags=flags, timeout=15)
+            best_diff = 9999.0
+            for line in res.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    c_info = json.loads(line)
+                    c_id = c_info.get("id")
+                    c_title = (c_info.get("title") or "").lower()
+                    c_dur = c_info.get("duration") or 0
+
+                    # Filter out covers, karaoke, reaction
+                    if "cover" in c_title and "cover" not in intended_title.lower():
+                        continue
+                    if "karaoke" in c_title or "reaction" in c_title:
+                        continue
+
+                    # If target duration known, select closest
+                    if target_dur_s > 0 and c_dur > 0:
+                        diff = abs(c_dur - target_dur_s)
+                        if diff < best_diff and diff <= 15.0:
+                            best_diff = diff
+                            chosen_id = c_id
+                    elif not chosen_id:
+                        chosen_id = c_id
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        target_url = f"https://www.youtube.com/watch?v={chosen_id}" if chosen_id else f"ytsearch1:{search_query}"
+
+        if progress_cb:
+            progress_cb(f"Downloading authentic audio: {intended_artist} - {intended_title}...")
+
+        temp_dir = tempfile.mkdtemp(prefix="sma_redl_")
+        temp_out = os.path.join(temp_dir, f"audio.%(ext)s")
+        aq = "0" if ext in ("flac", "wav") else "5"
+
+        try:
+            dl_cmd = [
+                yt_dlp_bin,
+                "--newline",
+                "--no-playlist",
+                "-f", "ba/b",
+                "--extract-audio",
+                "--audio-format", ext,
+                "--audio-quality", aq,
+                "-o", temp_out,
+                target_url
+            ]
+            dl_proc = subprocess.run(dl_cmd, capture_output=True, text=True, creationflags=flags, timeout=60)
+
+            downloaded_file = None
+            for f in os.listdir(temp_dir):
+                if f.endswith(f".{ext}") or f.startswith("audio"):
+                    downloaded_file = os.path.join(temp_dir, f)
+                    break
+
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                err_snippet = dl_proc.stderr[:150] if dl_proc.stderr else "Unknown download error"
+                return {"success": False, "error": f"Audio download failed: {err_snippet}"}
+
+            if progress_cb:
+                progress_cb(f"Applying authentic tags and cover art: {intended_artist} - {intended_title}...")
+
+            # Cover art
+            temp_cover = None
+            if ref_cover:
+                temp_cover = os.path.join(temp_dir, "cover.jpg")
+                if not PlexampTagger.download_cover_art(ref_cover, temp_cover):
+                    temp_cover = None
+
+            # Lyrics
+            lyrics = LyricsFetcher.fetch_lyrics(intended_artist, intended_title, ref_album)
+            plain_l = lyrics.get("plain_lyrics", "")
+            synced_l = lyrics.get("synced_lyrics", "")
+
+            # ReplayGain
+            gain_val = None
+            ffmpeg_exe = os.path.join(base_dir, "ffmpeg.exe") if os.path.exists(os.path.join(base_dir, "ffmpeg.exe")) else "ffmpeg"
+            try:
+                g, p = ReplayGainCalculator.calculate_replaygain(downloaded_file, ffmpeg_exe)
+                if g:
+                    gain_val = (g, p)
+            except Exception:
+                pass
+
+            # Tag
+            track_payload = {
+                "title": intended_title,
+                "artist": intended_artist,
+                "artists": [intended_artist],
+                "album": ref_album,
+                "album_artist": intended_artist,
+                "track_number": 1,
+                "total_tracks": 1,
+                "disc_number": 1,
+                "year": ref_year,
+                "release_date": ref_year
+            }
+            PlexampTagger.apply_metadata(
+                file_path=downloaded_file,
+                track_info=track_payload,
+                cover_image_path=temp_cover if (temp_cover and os.path.exists(temp_cover)) else None,
+                plain_lyrics=plain_l,
+                replaygain=gain_val
+            )
+
+            # Move/Replace file
+            target_final_path = file_path
+            if reorganize and destination_root and os.path.exists(destination_root):
+                clean_art = sanitize_filename(intended_artist)
+                clean_alb = sanitize_filename(ref_album)
+                clean_tit = sanitize_filename(intended_title)
+                t_dir = os.path.join(destination_root, clean_art, clean_alb)
+                os.makedirs(t_dir, exist_ok=True)
+                target_final_path = os.path.join(t_dir, f"{clean_tit}.{ext}")
+
+            safe_move_file(downloaded_file, target_final_path)
+
+            # Write .lrc if synced lyrics found
+            if synced_l:
+                lrc_path = os.path.splitext(target_final_path)[0] + ".lrc"
+                try:
+                    with open(lrc_path, "w", encoding="utf-8") as lf:
+                        lf.write(synced_l)
+                except Exception:
+                    pass
+
+            return {
+                "success": True,
+                "file_path": target_final_path,
+                "artist": intended_artist,
+                "title": intended_title,
+                "album": ref_album,
+                "year": ref_year
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    @classmethod
+    def quarantine_file_to_sort(
+        cls,
+        file_path: str,
+        destination_root: str,
+        sort_folder_name: str = "_SORT_UNMATCHED",
+        progress_cb: Optional[Callable[[str], None]] = None
+    ) -> Dict:
+        """
+        Moves an unrecognized, cover, or mismatched audio file to an isolated quarantine folder
+        ('_SORT_UNMATCHED') along with its sidecar .lrc lyrics file, and creates a
+        .plexignore file with '*' so Plexamp / Plex will ignore the folder until reviewed.
+        """
+        try:
+            if not file_path or not os.path.exists(file_path):
+                return {"success": False, "error": f"File not found: {file_path}"}
+
+            quarantine_dir = os.path.join(destination_root, sort_folder_name)
+            os.makedirs(quarantine_dir, exist_ok=True)
+
+            # Ensure .plexignore exists so Plex doesn't index quarantined files
+            plexignore_path = os.path.join(quarantine_dir, ".plexignore")
+            if not os.path.exists(plexignore_path):
+                try:
+                    with open(plexignore_path, "w", encoding="utf-8") as f:
+                        f.write("*\n# Ignore all unmatched quarantined files from Plex library\n")
+                except Exception:
+                    pass
+
+            old_folder = os.path.dirname(os.path.abspath(file_path))
+            filename = os.path.basename(file_path)
+            target_path = os.path.join(quarantine_dir, filename)
+
+            # Handle existing filename collisions
+            if os.path.exists(target_path) and os.path.abspath(target_path) != os.path.abspath(file_path):
+                base_n, ext_n = os.path.splitext(filename)
+                target_path = os.path.join(quarantine_dir, f"{base_n}_{int(time.time())}{ext_n}")
+
+            if progress_cb:
+                progress_cb(f"Moving to quarantine: {filename} -> {sort_folder_name}/")
+
+            safe_move_file(file_path, target_path)
+
+            # Also move sidecar .lrc if present
+            base_old = os.path.splitext(file_path)[0]
+            lrc_old = base_old + ".lrc"
+            if os.path.exists(lrc_old):
+                base_target = os.path.splitext(target_path)[0]
+                lrc_target = base_target + ".lrc"
+                try:
+                    safe_move_file(lrc_old, lrc_target)
+                except Exception:
+                    pass
+
+            # Cleanup empty source folders
+            try:
+                cls._cleanup_empty_folders(old_folder, stop_at=destination_root)
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "old_path": file_path,
+                "new_path": target_path,
+                "quarantine_dir": quarantine_dir,
+                "filename": filename
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @classmethod
     def _cleanup_empty_folders(cls, folder_path: str, stop_at: str):
         """Recursively cleans up empty directories up to stop_at boundary."""
         curr = os.path.abspath(folder_path)
@@ -770,22 +1209,25 @@ class AudioFactChecker:
                 f.write("SHALLOT MEDIA ARCHIVE - AUDIO FACT-CHECK & VERIFICATION REPORT\n")
                 f.write("=" * 80 + "\n\n")
                 total = len(results)
-                mismatches = [r for r in results if r.get("status") == "MISMATCH"]
+                discrepancies = [r for r in results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH")]
+                covers = [r for r in results if r.get("status") == "COVER_DETECTED"]
                 verified = [r for r in results if r.get("status") == "VERIFIED"]
-                unrec = [r for r in results if r.get("status") == "UNRECOGNIZED"]
+                unrec = [r for r in results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR")]
 
                 f.write(f"Total Files Scanned: {total}\n")
                 f.write(f"Verified (Match):    {len(verified)}\n")
-                f.write(f"Mismatches (Wrong):  {len(mismatches)}\n")
-                f.write(f"Unrecognized:        {len(unrec)}\n\n")
+                f.write(f"Covers Detected:     {len(covers)}\n")
+                f.write(f"Total Discrepancies: {len(discrepancies)}\n")
+                f.write(f"Unrecognized/Errors: {len(unrec)}\n\n")
 
-                if mismatches:
-                    f.write("MISMATCHED TRACKS (WRONG TAGS DETECTED):\n")
+                if discrepancies:
+                    f.write("DISCREPANCY TRACKS (COVERS & MISMATCHES DETECTED):\n")
                     f.write("-" * 80 + "\n")
-                    for m in mismatches:
+                    for m in discrepancies:
                         curr = m.get("current", {})
                         rec = m.get("recognized", {})
                         f.write(f"File: {m.get('file_path')}\n")
+                        f.write(f"  Status:          [{m.get('status')}]\n")
                         f.write(f"  Current Tag:     {curr.get('artist')} - {curr.get('title')} [{curr.get('album')}]\n")
                         f.write(f"  ACTUAL AUDIO:    {rec.get('artist')} - {rec.get('title')} [{rec.get('album')} ({rec.get('year')})]\n")
                         f.write(f"  Reason:          {m.get('discrepancy_reason')}\n\n")
@@ -802,7 +1244,7 @@ def main():
     args = parser.parse_args()
     scan_path = os.path.abspath(args.path)
 
-    print(f"[Fact-Checker] Starting acoustic scan on: {scan_path}")
+    print(f"[Fact-Checker] Starting deep acoustic scan on: {scan_path}")
     
     if os.path.isfile(scan_path):
         res = AudioFactChecker.verify_single_file(scan_path)
@@ -819,20 +1261,22 @@ def main():
         results = AudioFactChecker.scan_directory(scan_path, progress_cb=progress)
 
     # Summary
-    mismatches = [r for r in results if r.get("status") == "MISMATCH"]
+    discrepancies = [r for r in results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH")]
+    covers = [r for r in results if r.get("status") == "COVER_DETECTED"]
     verified = [r for r in results if r.get("status") == "VERIFIED"]
-    unrec = [r for r in results if r.get("status") == "UNRECOGNIZED"]
+    unrec = [r for r in results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR")]
 
     print("\n" + "=" * 60)
-    print(f"Scan Complete! Total: {len(results)} | Verified: {len(verified)} | Mismatches: {len(mismatches)} | Unrecognized: {len(unrec)}")
+    print(f"Scan Complete! Total: {len(results)} | Verified: {len(verified)} | Covers: {len(covers)} | Discrepancies: {len(discrepancies)} | Unrecognized: {len(unrec)}")
     print("=" * 60)
 
-    if mismatches:
-        print("\nMISMATCHES FOUND:")
-        for m in mismatches:
+    if discrepancies:
+        print("\nDISCREPANCIES FOUND:")
+        for m in discrepancies:
             curr = m.get("current", {})
             rec = m.get("recognized", {})
-            print(f"⚠️  {m.get('filename')}")
+            icon = "🎭" if m.get("status") == "COVER_DETECTED" else "⚠️"
+            print(f"{icon}  [{m.get('status')}] {m.get('filename')}")
             print(f"   Tagged As: {curr.get('artist')} - {curr.get('title')} [{curr.get('album')}]")
             print(f"   ACTUAL:    {rec.get('artist')} - {rec.get('title')} [{rec.get('album')} ({rec.get('year')})]\n")
 
@@ -846,10 +1290,10 @@ def main():
     print(f"Report exported to: {args.output}")
 
     # Fix if requested
-    if args.fix and mismatches:
-        print(f"\n[Fact-Checker] Fixing {len(mismatches)} mismatched tracks...")
+    if args.fix and discrepancies:
+        print(f"\n[Fact-Checker] Fixing {len(discrepancies)} mismatched tracks...")
         dest_root = scan_path if os.path.isdir(scan_path) else os.path.dirname(scan_path)
-        for m in mismatches:
+        for m in discrepancies:
             fp = m.get("file_path")
             res_fix = AudioFactChecker.fix_and_retag(
                 file_path=fp,

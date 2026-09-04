@@ -1746,6 +1746,18 @@ class DownloaderApp(ctk.CTk):
         self.verifier_cache_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_cache_switch)
 
+        lbl_workers = ctk.CTkLabel(v_opts_row, text="Threads:", font=("Segoe UI", 9, "bold"), text_color="#78909C")
+        lbl_workers.pack(side="left", padx=(5, 2))
+        self.verifier_workers_dropdown = ctk.CTkComboBox(
+            v_opts_row,
+            values=["2 Workers", "3 Workers", "4 Workers (Rec.)", "5 Workers"],
+            width=125,
+            height=26,
+            font=("Segoe UI", 9)
+        )
+        self.verifier_workers_dropdown.set("4 Workers (Rec.)")
+        self.verifier_workers_dropdown.pack(side="left", padx=(0, 10))
+
         self.btn_verifier_clear_cache = ctk.CTkButton(
             v_opts_row,
             text="🗑 Clear Cache",
@@ -1796,6 +1808,10 @@ class DownloaderApp(ctk.CTk):
         self.verifier_lbl_total = ctk.CTkLabel(v_stats_inner, text="0 Scanned", font=("Segoe UI", 10, "bold"), text_color="#78909C", cursor="hand2")
         self.verifier_lbl_total.pack(side="left", padx=(0, 10))
         self.verifier_lbl_total.bind("<Button-1>", lambda e: self.set_verifier_filter("all"))
+
+        self.verifier_lbl_covers = ctk.CTkLabel(v_stats_inner, text="0 🎭 Covers", font=("Segoe UI", 10, "bold"), text_color="#F59E0B", cursor="hand2")
+        self.verifier_lbl_covers.pack(side="left", padx=(0, 10))
+        self.verifier_lbl_covers.bind("<Button-1>", lambda e: self.set_verifier_filter("covers"))
 
         self.verifier_lbl_mismatch = ctk.CTkLabel(v_stats_inner, text="0 ⚠️ Mismatches", font=("Segoe UI", 10, "bold"), text_color="#FB7185", cursor="hand2")
         self.verifier_lbl_mismatch.pack(side="left", padx=(0, 10))
@@ -1853,6 +1869,17 @@ class DownloaderApp(ctk.CTk):
         self.btn_vfilt_verified.pack(side="right", padx=(4, 0))
         self.theme_buttons_secondary.append(self.btn_vfilt_verified)
 
+        self.btn_vfilt_covers = ctk.CTkButton(
+            v_stats_inner,
+            text="🎭 Covers",
+            width=75,
+            height=24,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("covers")
+        )
+        self.btn_vfilt_covers.pack(side="right", padx=(4, 0))
+        self.theme_buttons_secondary.append(self.btn_vfilt_covers)
+
         self.btn_vfilt_mismatch = ctk.CTkButton(
             v_stats_inner,
             text="⚠️ Mismatches",
@@ -1898,16 +1925,16 @@ class DownloaderApp(ctk.CTk):
         v_act_top = ctk.CTkFrame(self.verifier_action_card, fg_color="transparent")
         v_act_top.pack(fill="x", padx=15, pady=(8, 2))
 
-        self.verifier_status_lbl = ctk.CTkLabel(v_act_top, text="Ready to fact-check audio library", font=("Segoe UI", 10, "bold"), text_color="#78909C", anchor="w")
+        self.verifier_status_lbl = ctk.CTkLabel(v_act_top, text="Ready to fact-check audio library", font=("Segoe UI", 11, "bold"), text_color="#78909C", anchor="w")
         self.verifier_status_lbl.pack(side="left")
         self.theme_labels_secondary.append(self.verifier_status_lbl)
 
-        self.verifier_counter_lbl = ctk.CTkLabel(v_act_top, text="0 / 0", font=("Segoe UI", 10, "bold"), text_color="#F5F5F7", anchor="e")
+        self.verifier_counter_lbl = ctk.CTkLabel(v_act_top, text="0 / 0  (0.0%)", font=("Segoe UI", 11, "bold"), text_color="#38BDF8", anchor="e")
         self.verifier_counter_lbl.pack(side="right")
 
-        self.verifier_progress_bar = ctk.CTkProgressBar(self.verifier_action_card, height=8, corner_radius=4, progress_color="#00E5FF", fg_color="#070F15")
+        self.verifier_progress_bar = ctk.CTkProgressBar(self.verifier_action_card, height=14, corner_radius=7, progress_color="#00E5FF", fg_color="#1E293B")
         self.verifier_progress_bar.set(0)
-        self.verifier_progress_bar.pack(fill="x", padx=15, pady=(2, 4))
+        self.verifier_progress_bar.pack(fill="x", padx=15, pady=(4, 6))
 
         self.verifier_workers_lbl = ctk.CTkLabel(
             self.verifier_action_card,
@@ -1919,6 +1946,18 @@ class DownloaderApp(ctk.CTk):
         self.verifier_workers_lbl.pack(fill="x", padx=15, pady=(0, 6))
         v_act_btns = ctk.CTkFrame(self.verifier_action_card, fg_color="transparent")
         v_act_btns.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.btn_verifier_redownload_selected = ctk.CTkButton(
+            v_act_btns,
+            text="🔄  Re-Download Real Audio",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            corner_radius=8,
+            fg_color="#028090",
+            hover_color="#00A896",
+            command=self.redownload_selected_verifier_tracks
+        )
+        self.btn_verifier_redownload_selected.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.btn_verifier_fix_selected = ctk.CTkButton(
             v_act_btns,
@@ -1945,6 +1984,21 @@ class DownloaderApp(ctk.CTk):
         )
         self.btn_verifier_keep_selected.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
+        self.btn_verifier_move_to_sort = ctk.CTkButton(
+            v_act_btns,
+            text="📦 Move to _SORT",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            corner_radius=8,
+            fg_color="#7C2D12",
+            hover_color="#9A3412",
+            border_color="#FB923C",
+            border_width=1,
+            text_color="#FED7AA",
+            command=self.move_selected_verifier_tracks_to_sort
+        )
+        self.btn_verifier_move_to_sort.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
         self.btn_verifier_export = ctk.CTkButton(
             v_act_btns,
             text="📋 Export Report",
@@ -1956,6 +2010,18 @@ class DownloaderApp(ctk.CTk):
         )
         self.btn_verifier_export.pack(side="left", padx=(0, 6))
         self.theme_buttons_secondary.append(self.btn_verifier_export)
+
+        self.btn_verifier_error_log = ctk.CTkButton(
+            v_act_btns,
+            text="📑 Error Log",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            width=100,
+            corner_radius=8,
+            command=self.open_fact_checker_error_log
+        )
+        self.btn_verifier_error_log.pack(side="left", padx=(0, 6))
+        self.theme_buttons_secondary.append(self.btn_verifier_error_log)
 
         self.btn_verifier_open_folder = ctk.CTkButton(
             v_act_btns,
@@ -5123,11 +5189,20 @@ class DownloaderApp(ctk.CTk):
         self.verifier_track_items = []
         self.verifier_active_workers = {}
 
-        # Clear scrollable list
+        # Clear scrollable list and add live progress banner
         for child in self.verifier_scroll.winfo_children():
             child.destroy()
 
+        self.verifier_scan_live_banner = ctk.CTkLabel(
+            self.verifier_scroll,
+            text="🎧 Acoustic verification started... Tracks will appear live below as waveforms are identified.",
+            font=("Segoe UI", 11, "italic"),
+            text_color="#38BDF8"
+        )
+        self.verifier_scan_live_banner.pack(pady=20)
+
         self.verifier_progress_bar.set(0)
+        self.verifier_counter_lbl.configure(text="0 / 0")
         self.btn_verifier_start_scan.configure(state="disabled", text="Scanning Library... ⏳")
         self.btn_verifier_fix_selected.configure(state="disabled")
         self.btn_verifier_export.configure(state="disabled")
@@ -5136,7 +5211,9 @@ class DownloaderApp(ctk.CTk):
         self.power_light.configure(text="● SCANNING", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
 
         self.verifier_lbl_total.configure(text="0 Scanned")
-        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Mismatches")
+        if hasattr(self, 'verifier_lbl_covers'):
+            self.verifier_lbl_covers.configure(text="0 🎭 Covers")
+        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Issues")
         self.verifier_lbl_verified.configure(text="0 ✅ Verified")
         self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
 
@@ -5162,7 +5239,7 @@ class DownloaderApp(ctk.CTk):
                 if len(fn) > 28:
                     fn = fn[:25] + "..."
                 elapsed = int(now - info.get("start_time", now))
-                warn = " ⚠️" if elapsed >= 15 else ""
+                warn = " ⚠️" if elapsed >= 10 else ""
                 worker_strs.append(f"W{idx}: {fn} ({elapsed}s{warn})")
 
             disp_text = "⚡ Active: " + "  |  ".join(worker_strs)
@@ -5176,25 +5253,42 @@ class DownloaderApp(ctk.CTk):
         def progress_cb(curr: int, total: int, filename: str):
             pct = curr / max(1, total)
             self.after(0, lambda: self.verifier_progress_bar.set(pct))
-            self.after(0, lambda: self.verifier_counter_lbl.configure(text=f"{curr} / {total}"))
-            self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Acoustic Check ({curr}/{total}): {filename[:40]}"))
+            self.after(0, lambda: self.verifier_counter_lbl.configure(text=f"{curr} / {total}  ({pct*100:.1f}%)"))
+            if curr == 0:
+                self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Analyzing {total} audio files...", text_color="#38BDF8"))
+            else:
+                self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Acoustic Check ({curr}/{total}): {filename[:45]}", text_color="#E0F2FE"))
             self.after(0, lambda: self.update_taskbar_progress(int(pct * 100)))
 
         def item_cb(res: dict):
             self.verifier_scan_results.append(res)
+            original_idx = len(self.verifier_scan_results) - 1
+
             # Update stats
             tot = len(self.verifier_scan_results)
-            mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+            cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
+            mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
             ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
             unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
             self.after(0, lambda: self.verifier_lbl_total.configure(text=f"{tot} Scanned"))
-            self.after(0, lambda: self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches"))
+            if hasattr(self, 'verifier_lbl_covers'):
+                self.after(0, lambda: self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers"))
+            self.after(0, lambda: self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues"))
             self.after(0, lambda: self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified"))
             self.after(0, lambda: self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown"))
 
+            # Live stream track row into UI
+            self.after(0, lambda r=res, idx=original_idx: self._stream_verifier_row(r, idx))
+
         def run_scan():
-            self.log(f"Starting acoustic library fact-check on: {folder}")
+            self.log(f"Starting deep acoustic library fact-check on: {folder}")
             use_cache = bool(self.verifier_cache_switch.get()) if hasattr(self, 'verifier_cache_switch') else True
+            w_str = self.verifier_workers_dropdown.get() if hasattr(self, 'verifier_workers_dropdown') else "4"
+            try:
+                num_workers = int(w_str.split()[0])
+            except Exception:
+                num_workers = 4
+            self.log(f"[Fact-Checker] Concurrency set to {num_workers} parallel workers.")
             try:
                 AudioFactChecker.scan_directory(
                     root_dir=folder,
@@ -5203,7 +5297,8 @@ class DownloaderApp(ctk.CTk):
                     active_worker_cb=active_worker_cb,
                     log_cb=log_cb,
                     cancel_event=self.verifier_cancel_event,
-                    per_file_timeout=20.0,
+                    max_workers=num_workers,
+                    per_file_timeout=12.0,
                     use_cache=use_cache
                 )
             except Exception as e:
@@ -5227,6 +5322,8 @@ class DownloaderApp(ctk.CTk):
         self.verifier_workers_lbl.configure(text="")
         self.btn_verifier_start_scan.configure(state="normal", text="🔍  Scan & Fact-Check")
         self.btn_verifier_fix_selected.configure(state="normal")
+        if hasattr(self, 'btn_verifier_redownload_selected'):
+            self.btn_verifier_redownload_selected.configure(state="normal")
         self.btn_verifier_export.configure(state="normal")
         self.update_taskbar_progress(0)
         self.power_light.configure(
@@ -5235,20 +5332,24 @@ class DownloaderApp(ctk.CTk):
         )
 
         tot = len(self.verifier_scan_results)
-        mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+        cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
+        mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
         ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
         unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
 
-        # If mismatches are detected, automatically default the view to Mismatches so the user immediately sees tracks to fix
-        if mis > 0:
+        # If covers or mismatches are detected, automatically default the view
+        if cov > 0:
+            self.verifier_filter_mode = "covers"
+        elif mis > 0:
             self.verifier_filter_mode = "mismatch"
         self.update_verifier_filter_buttons()
 
+        msg = f"✓ Scan Complete: {tot} files | {cov} covers | {mis} issues | {ver} verified"
         self.verifier_status_lbl.configure(
-            text=f"✓ Scan Complete: {tot} files scanned | {mis} mismatches found | {ver} verified",
-            text_color="#FB7185" if mis > 0 else "#4ADE80"
+            text=msg,
+            text_color="#F59E0B" if cov > 0 else ("#FB7185" if mis > 0 else "#4ADE80")
         )
-        self.log(f"Scan finished: {tot} total files, {mis} tag mismatches detected, {ver} verified, {unr} unrecognized/timeouts.")
+        self.log(f"Scan finished: {tot} files. {cov} covers, {mis} total issues detected, {ver} verified, {unr} unrecognized/timeouts.")
 
         self.render_verifier_results()
 
@@ -5266,6 +5367,7 @@ class DownloaderApp(ctk.CTk):
         mode = self.verifier_filter_mode
         if hasattr(self, 'btn_vfilt_all'):
             self.btn_vfilt_all.configure(fg_color=active_bg if mode == "all" else inactive_bg, border_color=cfg.get("accent", "#00E5FF") if mode == "all" else border)
+            self.btn_vfilt_covers.configure(fg_color="#78350F" if mode == "covers" else inactive_bg, border_color="#F59E0B" if mode == "covers" else border)
             self.btn_vfilt_mismatch.configure(fg_color="#881337" if mode == "mismatch" else inactive_bg, border_color="#FB7185" if mode == "mismatch" else border)
             self.btn_vfilt_verified.configure(fg_color="#064E3B" if mode == "verified" else inactive_bg, border_color="#34D399" if mode == "verified" else border)
             self.btn_vfilt_unrec.configure(fg_color="#334155" if mode == "unrec" else inactive_bg, border_color="#94A3B8" if mode == "unrec" else border)
@@ -5275,7 +5377,9 @@ class DownloaderApp(ctk.CTk):
         AudioFactChecker.clear_cache()
         self.verifier_scan_results = []
         self.verifier_lbl_total.configure(text="0 Scanned")
-        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Mismatches")
+        if hasattr(self, 'verifier_lbl_covers'):
+            self.verifier_lbl_covers.configure(text="0 🎭 Covers")
+        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Issues")
         self.verifier_lbl_verified.configure(text="0 ✅ Verified")
         self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
         self.verifier_status_lbl.configure(text="✓ Verification cache cleared. Ready for fresh scan.", text_color="#4ADE80")
@@ -5297,17 +5401,23 @@ class DownloaderApp(ctk.CTk):
         border_col = cfg.get("border", "#1F3A4E")
 
         status_priority = {
-            "MISMATCH": 0,
-            "TIMEOUT": 1,
-            "ERROR": 2,
-            "UNRECOGNIZED": 3,
-            "VERIFIED": 4
+            "COVER_DETECTED": 0,
+            "WRONG_TRACK": 1,
+            "DURATION_MISMATCH": 2,
+            "METADATA_TYPO": 3,
+            "MISMATCH": 4,
+            "TIMEOUT": 5,
+            "ERROR": 6,
+            "UNRECOGNIZED": 7,
+            "VERIFIED": 8
         }
 
         filtered = []
         for idx, res in enumerate(self.verifier_scan_results):
             st = res.get("status", "")
-            if self.verifier_filter_mode == "mismatch" and st != "MISMATCH":
+            if self.verifier_filter_mode == "covers" and st != "COVER_DETECTED":
+                continue
+            if self.verifier_filter_mode == "mismatch" and st not in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"):
                 continue
             if self.verifier_filter_mode == "verified" and st != "VERIFIED":
                 continue
@@ -5325,132 +5435,241 @@ class DownloaderApp(ctk.CTk):
             return
 
         for original_idx, res in filtered:
-            st = res.get("status", "")
-            curr = res.get("current", {})
-            rec = res.get("recognized", {})
+            self._create_verifier_row_widget(res, original_idx)
 
-            row_frame = ctk.CTkFrame(
-                self.verifier_scroll,
-                fg_color=card_bg,
-                corner_radius=8,
-                border_color="#FB7185" if st == "MISMATCH" else border_col,
-                border_width=1
-            )
-            row_frame.pack(fill="x", pady=3, padx=4)
+    def _stream_verifier_row(self, res: dict, original_idx: int):
+        """ Dynamically adds a scanned track row to the active view in real-time as recognition finishes """
+        if hasattr(self, 'verifier_scan_live_banner') and self.verifier_scan_live_banner and self.verifier_scan_live_banner.winfo_exists():
+            try:
+                self.verifier_scan_live_banner.destroy()
+            except Exception:
+                pass
+            self.verifier_scan_live_banner = None
 
-            # Checkbox
-            var = ctk.IntVar(value=1 if st == "MISMATCH" else 0)
-            cb = ctk.CTkCheckBox(
+        st = res.get("status", "")
+        mode = getattr(self, "verifier_filter_mode", "all")
+        if mode == "covers" and st != "COVER_DETECTED":
+            return
+        if mode == "mismatch" and st not in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"):
+            return
+        if mode == "verified" and st != "VERIFIED":
+            return
+        if mode == "unrec" and st not in ("UNRECOGNIZED", "TIMEOUT", "ERROR"):
+            return
+
+        self._create_verifier_row_widget(res, original_idx)
+
+    def _create_verifier_row_widget(self, res: dict, original_idx: int):
+        """ Builds and packs a single track row widget into the scrollable list """
+        cfg = getattr(self, 'theme_cfg', {})
+        card_bg = cfg.get("input_bg", "#070F15")
+        border_col = cfg.get("border", "#1F3A4E")
+
+        st = res.get("status", "")
+        curr = res.get("current", {})
+        rec = res.get("recognized", {})
+
+        row_frame = ctk.CTkFrame(
+            self.verifier_scroll,
+            fg_color=card_bg,
+            corner_radius=8,
+            border_color="#FB7185" if st == "MISMATCH" else border_col,
+            border_width=1
+        )
+        row_frame.pack(fill="x", pady=3, padx=4)
+
+        # Checkbox
+        var = ctk.IntVar(value=1 if st in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "DURATION_MISMATCH", "METADATA_TYPO") else 0)
+        cb = ctk.CTkCheckBox(
+            row_frame,
+            text="",
+            variable=var,
+            width=24,
+            checkbox_width=18,
+            checkbox_height=18,
+            corner_radius=4,
+            fg_color=cfg.get("option_btn", "#028090"),
+            hover_color=cfg.get("option_hover", "#00A896")
+        )
+        cb.pack(side="left", padx=(10, 6), pady=8)
+
+        # Status Badge
+        if st == "COVER_DETECTED":
+            badge_text = "🎭 COVER"
+            badge_color = "#F59E0B"
+        elif st == "WRONG_TRACK":
+            badge_text = "❌ WRONG AUDIO"
+            badge_color = "#FB7185"
+        elif st == "DURATION_MISMATCH":
+            badge_text = "⏳ SKIT/EDIT"
+            badge_color = "#EAB308"
+        elif st == "METADATA_TYPO":
+            badge_text = "🏷️ TYPO"
+            badge_color = "#38BDF8"
+        elif st == "MISMATCH":
+            badge_text = "⚠️ WRONG TAG"
+            badge_color = "#FB7185"
+        elif st == "VERIFIED":
+            badge_text = "✅ VERIFIED"
+            badge_color = "#4ADE80"
+        elif st == "QUARANTINED":
+            badge_text = "📦 QUARANTINED"
+            badge_color = "#FB923C"
+        elif st == "TIMEOUT":
+            badge_text = "⏳ TIMEOUT"
+            badge_color = "#F59E0B"
+        elif st == "UNRECOGNIZED":
+            badge_text = "❓ UNKNOWN"
+            badge_color = "#94A3B8"
+        else:
+            badge_text = "⚠️ ERROR"
+            badge_color = "#F87171"
+
+        badge_lbl = ctk.CTkLabel(
+            row_frame,
+            text=badge_text,
+            font=("Segoe UI", 9, "bold"),
+            text_color=badge_color,
+            width=95,
+            anchor="w"
+        )
+        badge_lbl.pack(side="left", padx=(0, 8))
+
+        # Track Info Container
+        info_container = ctk.CTkFrame(row_frame, fg_color="transparent")
+        info_container.pack(side="left", fill="x", expand=True, pady=6)
+
+        # Row 1: File name & path
+        fn_lbl = ctk.CTkLabel(
+            info_container,
+            text=res.get("filename", ""),
+            font=("Segoe UI", 10, "bold"),
+            text_color=cfg.get("text_primary", "#F5F5F7"),
+            anchor="w"
+        )
+        fn_lbl.pack(fill="x")
+
+        # Row 2: Tagged vs Actual
+        curr_tag_str = f"Tag: {curr.get('artist', 'Unknown')} - {curr.get('title', 'Unknown')} [{curr.get('album', '')}]"
+        if rec.get("matched"):
+            rec_str = f"ACTUAL: {rec.get('artist')} - {rec.get('title')} [{rec.get('album')} ({rec.get('year')})]"
+            detail_text = f"{curr_tag_str}   ➔   {rec_str}"
+        else:
+            detail_text = f"{curr_tag_str}   (No audio match found)"
+
+        detail_lbl = ctk.CTkLabel(
+            info_container,
+            text=detail_text,
+            font=("Segoe UI", 9),
+            text_color="#F59E0B" if st == "COVER_DETECTED" else ("#FB7185" if st in ("MISMATCH", "WRONG_TRACK") else "#94A3B8"),
+            anchor="w"
+        )
+        detail_lbl.pack(fill="x")
+
+        # Action Button per row
+        btn_redl = None
+        btn_fix = None
+        btn_keep = None
+        btn_sort = None
+        if st in ("COVER_DETECTED", "WRONG_TRACK", "DURATION_MISMATCH"):
+            btn_redl = ctk.CTkButton(
                 row_frame,
-                text="",
-                variable=var,
-                width=24,
-                checkbox_width=18,
-                checkbox_height=18,
-                corner_radius=4,
-                fg_color=cfg.get("option_btn", "#028090"),
-                hover_color=cfg.get("option_hover", "#00A896")
-            )
-            cb.pack(side="left", padx=(10, 6), pady=8)
-
-            # Status Badge
-            if st == "MISMATCH":
-                badge_text = "⚠️ WRONG TAG"
-                badge_color = "#FB7185"
-            elif st == "VERIFIED":
-                badge_text = "✅ VERIFIED"
-                badge_color = "#4ADE80"
-            elif st == "TIMEOUT":
-                badge_text = "⏳ TIMEOUT"
-                badge_color = "#F59E0B"
-            elif st == "UNRECOGNIZED":
-                badge_text = "❓ UNKNOWN"
-                badge_color = "#94A3B8"
-            else:
-                badge_text = "⚠️ ERROR"
-                badge_color = "#F87171"
-
-            badge_lbl = ctk.CTkLabel(
-                row_frame,
-                text=badge_text,
+                text="🔄 Re-Download",
+                width=95,
+                height=26,
                 font=("Segoe UI", 9, "bold"),
-                text_color=badge_color,
+                fg_color="#028090",
+                hover_color="#00A896",
+                command=lambda idx=original_idx: self.redownload_single_verifier_track(idx)
+            )
+            btn_redl.pack(side="right", padx=(4, 8))
+
+            btn_fix = ctk.CTkButton(
+                row_frame,
+                text="🏷️ Accept Tags",
                 width=85,
-                anchor="w"
+                height=26,
+                font=("Segoe UI", 9, "bold"),
+                command=lambda idx=original_idx: self.fix_single_verifier_track(idx)
             )
-            badge_lbl.pack(side="left", padx=(0, 8))
+            btn_fix.pack(side="right", padx=(2, 2))
 
-            # Track Info Container
-            info_container = ctk.CTkFrame(row_frame, fg_color="transparent")
-            info_container.pack(side="left", fill="x", expand=True, pady=6)
-
-            # Row 1: File name & path
-            fn_lbl = ctk.CTkLabel(
-                info_container,
-                text=res.get("filename", ""),
-                font=("Segoe UI", 10, "bold"),
-                text_color=cfg.get("text_primary", "#F5F5F7"),
-                anchor="w"
+            btn_keep = ctk.CTkButton(
+                row_frame,
+                text="✅ Keep",
+                width=60,
+                height=26,
+                font=("Segoe UI", 9, "bold"),
+                fg_color="#1E293B",
+                hover_color="#334155",
+                border_color="#34D399",
+                border_width=1,
+                text_color="#34D399",
+                command=lambda idx=original_idx: self.mark_verifier_track_as_verified(idx)
             )
-            fn_lbl.pack(fill="x")
-
-            # Row 2: Tagged vs Actual
-            curr_tag_str = f"Tag: {curr.get('artist', 'Unknown')} - {curr.get('title', 'Unknown')} [{curr.get('album', '')}]"
-            if rec.get("matched"):
-                rec_str = f"ACTUAL: {rec.get('artist')} - {rec.get('title')} [{rec.get('album')} ({rec.get('year')})]"
-                detail_text = f"{curr_tag_str}   ➔   {rec_str}"
-            else:
-                detail_text = f"{curr_tag_str}   (No audio match found)"
-
-            detail_lbl = ctk.CTkLabel(
-                info_container,
-                text=detail_text,
-                font=("Segoe UI", 9),
-                text_color="#FB7185" if st == "MISMATCH" else "#94A3B8",
-                anchor="w"
+            btn_keep.pack(side="right", padx=(0, 2))
+        elif st in ("METADATA_TYPO", "MISMATCH"):
+            btn_fix = ctk.CTkButton(
+                row_frame,
+                text="🛠 Fix Track",
+                width=75,
+                height=26,
+                font=("Segoe UI", 9, "bold"),
+                command=lambda idx=original_idx: self.fix_single_verifier_track(idx)
             )
-            detail_lbl.pack(fill="x")
+            btn_fix.pack(side="right", padx=(4, 10))
 
-            # Action Button per row
-            btn_fix = None
-            btn_keep = None
-            if st == "MISMATCH":
-                btn_fix = ctk.CTkButton(
-                    row_frame,
-                    text="🛠 Fix Track",
-                    width=75,
-                    height=26,
-                    font=("Segoe UI", 9, "bold"),
-                    command=lambda idx=original_idx: self.fix_single_verifier_track(idx)
-                )
-                btn_fix.pack(side="right", padx=(4, 10))
+            btn_keep = ctk.CTkButton(
+                row_frame,
+                text="✅ Keep Tags",
+                width=80,
+                height=26,
+                font=("Segoe UI", 9, "bold"),
+                fg_color="#1E293B",
+                hover_color="#334155",
+                border_color="#34D399",
+                border_width=1,
+                text_color="#34D399",
+                command=lambda idx=original_idx: self.mark_verifier_track_as_verified(idx)
+            )
+            btn_keep.pack(side="right", padx=(0, 2))
+        elif st in ("UNRECOGNIZED", "TIMEOUT", "ERROR"):
+            btn_sort = ctk.CTkButton(
+                row_frame,
+                text="📦 Quarantine",
+                width=85,
+                height=26,
+                font=("Segoe UI", 9, "bold"),
+                fg_color="#7C2D12",
+                hover_color="#9A3412",
+                border_color="#FB923C",
+                border_width=1,
+                text_color="#FED7AA",
+                command=lambda idx=original_idx: self.quarantine_single_verifier_track(idx)
+            )
+            btn_sort.pack(side="right", padx=(4, 10))
+        elif st == "QUARANTINED":
+            lbl_q = ctk.CTkLabel(
+                row_frame,
+                text="📦 In _SORT_UNMATCHED",
+                font=("Segoe UI", 9, "italic"),
+                text_color="#FB923C"
+            )
+            lbl_q.pack(side="right", padx=(4, 10))
 
-                btn_keep = ctk.CTkButton(
-                    row_frame,
-                    text="✅ Keep Tags",
-                    width=80,
-                    height=26,
-                    font=("Segoe UI", 9, "bold"),
-                    fg_color="#1E293B",
-                    hover_color="#334155",
-                    border_color="#34D399",
-                    border_width=1,
-                    text_color="#34D399",
-                    command=lambda idx=original_idx: self.mark_verifier_track_as_verified(idx)
-                )
-                btn_keep.pack(side="right", padx=(0, 2))
-
-            self.verifier_track_items.append({
-                "original_index": original_idx,
-                "result": res,
-                "var": var,
-                "row_frame": row_frame,
-                "checkbox": cb,
-                "badge_lbl": badge_lbl,
-                "detail_lbl": detail_lbl,
-                "btn_fix": btn_fix,
-                "btn_keep": btn_keep
-            })
+        self.verifier_track_items.append({
+            "original_index": original_idx,
+            "result": res,
+            "var": var,
+            "row_frame": row_frame,
+            "checkbox": cb,
+            "badge_lbl": badge_lbl,
+            "detail_lbl": detail_lbl,
+            "btn_redl": btn_redl,
+            "btn_fix": btn_fix,
+            "btn_keep": btn_keep,
+            "btn_sort": btn_sort
+        })
 
     def mark_verifier_track_as_verified(self, track_index: int):
         """ Marks a mismatched track as VERIFIED (false positive / keep current tags) """
@@ -5475,11 +5694,14 @@ class DownloaderApp(ctk.CTk):
                 print(f"Error saving marked track to cache: {e}")
 
         tot = len(self.verifier_scan_results)
-        mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+        cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
+        mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
         ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
         unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
         self.verifier_lbl_total.configure(text=f"{tot} Scanned")
-        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches")
+        if hasattr(self, 'verifier_lbl_covers'):
+            self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
+        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
         self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
         self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
         self.verifier_status_lbl.configure(
@@ -5518,11 +5740,14 @@ class DownloaderApp(ctk.CTk):
         AudioFactChecker.save_cache(cache)
 
         tot = len(self.verifier_scan_results)
-        mis = sum(1 for r in self.verifier_scan_results if r.get("status") == "MISMATCH")
+        cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
+        mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
         ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
         unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
         self.verifier_lbl_total.configure(text=f"{tot} Scanned")
-        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Mismatches")
+        if hasattr(self, 'verifier_lbl_covers'):
+            self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
+        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
         self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
         self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
         self.verifier_status_lbl.configure(
@@ -5605,7 +5830,7 @@ class DownloaderApp(ctk.CTk):
                     res["file_path"] = out.get("new_path", res.get("file_path"))
                     res["discrepancy_reason"] = "Re-tagged with verified acoustic match"
 
-            self.after(0, lambda: self.btn_verifier_fix_selected.configure(state="normal", text="🛠  Fix & Re-tag Selected Mismatches"))
+            self.after(0, lambda: self.btn_verifier_fix_selected.configure(state="normal", text="🛠  Fix & Re-tag Selected"))
             self.after(0, lambda: self.verifier_status_lbl.configure(
                 text=f"✓ Complete! {fixed_count} / {total} mismatched tracks corrected.",
                 text_color="#4ADE80"
@@ -5619,6 +5844,286 @@ class DownloaderApp(ctk.CTk):
             self.send_notification("Fact-Checker Complete", f"{fixed_count} mismatched songs have been corrected in your library!")
 
         threading.Thread(target=run_batch_fix, daemon=True).start()
+
+    def redownload_single_verifier_track(self, track_index: int):
+        """ Re-downloads authentic studio audio for a track detected as cover or wrong song """
+        if track_index >= len(self.verifier_scan_results):
+            return
+
+        res = self.verifier_scan_results[track_index]
+        curr = res.get("current", {})
+        intended_artist = curr.get("artist") or res.get("recognized", {}).get("artist", "")
+        intended_title = curr.get("title") or res.get("recognized", {}).get("title", "")
+        intended_album = curr.get("album", "")
+        file_path = res.get("file_path")
+        dest_root = self.verifier_folder_input.get().strip() or os.path.dirname(file_path)
+        reorg = bool(self.verifier_reorg_switch.get())
+
+        self.verifier_status_lbl.configure(text=f"Re-downloading authentic audio: {intended_artist} - {intended_title}...", text_color="#00E5FF")
+
+        def run_redl():
+            out = AudioFactChecker.redownload_track_audio(
+                file_path=file_path,
+                intended_artist=intended_artist,
+                intended_title=intended_title,
+                intended_album=intended_album,
+                destination_root=dest_root,
+                reorganize=reorg,
+                progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+            )
+            if out.get("success"):
+                res["status"] = "VERIFIED"
+                res["file_path"] = out.get("file_path", file_path)
+                res["discrepancy_reason"] = "Authentic studio audio re-downloaded and verified"
+                # Update persistent cache
+                try:
+                    cache = AudioFactChecker.load_cache()
+                    st = os.stat(res["file_path"])
+                    cache[res["file_path"]] = {"mtime": st.st_mtime, "size": st.st_size, "result": res}
+                    AudioFactChecker.save_cache(cache)
+                except Exception:
+                    pass
+                self.after(0, lambda: self.verifier_status_lbl.configure(
+                    text=f"✓ Authentic Audio Replaced: {intended_artist} - {intended_title}",
+                    text_color="#4ADE80"
+                ))
+                self.after(0, self.render_verifier_results)
+            else:
+                self.after(0, lambda: self.verifier_status_lbl.configure(
+                    text=f"✗ Re-download failed: {out.get('error')}",
+                    text_color="#FB7185"
+                ))
+
+        threading.Thread(target=run_redl, daemon=True).start()
+
+    def redownload_selected_verifier_tracks(self):
+        """ Re-downloads authentic audio for all selected tracks in batch """
+        selected = [item for item in self.verifier_track_items if item["var"].get() == 1]
+        if not selected:
+            self.verifier_status_lbl.configure(text="No tracks selected. Please check at least one box.", text_color="#FB7185")
+            return
+
+        dest_root = self.verifier_folder_input.get().strip()
+        reorg = bool(self.verifier_reorg_switch.get())
+
+        if hasattr(self, 'btn_verifier_redownload_selected'):
+            self.btn_verifier_redownload_selected.configure(state="disabled", text="Re-Downloading... ⏳")
+        self.verifier_progress_bar.set(0)
+        self.power_light.configure(text="● DOWNLOADING", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
+
+        def run_batch_redl():
+            total = len(selected)
+            fixed_count = 0
+            cache = AudioFactChecker.load_cache()
+            for idx, item in enumerate(selected, start=1):
+                res = item["result"]
+                curr = res.get("current", {})
+                intended_artist = curr.get("artist") or res.get("recognized", {}).get("artist", "")
+                intended_title = curr.get("title") or res.get("recognized", {}).get("title", "")
+                intended_album = curr.get("album", "")
+                file_path = res.get("file_path")
+
+                pct = idx / total
+                self.after(0, lambda p=pct: self.verifier_progress_bar.set(p))
+                self.after(0, lambda i=idx, t=total: self.verifier_counter_lbl.configure(text=f"{i} / {t}"))
+                self.after(0, lambda: self.verifier_status_lbl.configure(text=f"Authentic Audio ({idx}/{total}): {intended_title[:35]}"))
+
+                out = AudioFactChecker.redownload_track_audio(
+                    file_path=file_path,
+                    intended_artist=intended_artist,
+                    intended_title=intended_title,
+                    intended_album=intended_album,
+                    destination_root=dest_root,
+                    reorganize=reorg,
+                    progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+                )
+                if out.get("success"):
+                    fixed_count += 1
+                    res["status"] = "VERIFIED"
+                    res["file_path"] = out.get("file_path", file_path)
+                    res["discrepancy_reason"] = "Authentic studio audio re-downloaded and verified"
+                    try:
+                        st = os.stat(res["file_path"])
+                        cache[res["file_path"]] = {"mtime": st.st_mtime, "size": st.st_size, "result": res}
+                    except Exception:
+                        pass
+
+            AudioFactChecker.save_cache(cache)
+            if hasattr(self, 'btn_verifier_redownload_selected'):
+                self.after(0, lambda: self.btn_verifier_redownload_selected.configure(state="normal", text="🔄  Re-Download Real Audio"))
+            self.after(0, lambda: self.verifier_status_lbl.configure(
+                text=f"✓ Complete! {fixed_count} / {total} tracks replaced with authentic studio audio.",
+                text_color="#4ADE80"
+            ))
+            self.after(0, lambda: self.update_taskbar_progress(0))
+            self.after(0, lambda: self.power_light.configure(
+                text=getattr(self, 'theme_cfg', {}).get("status_text", "● READY"),
+                text_color=getattr(self, 'theme_cfg', {}).get("status_color", "#38BDF8")
+            ))
+            self.after(0, self.render_verifier_results)
+            self.send_notification("Fact-Checker Audio Replacement", f"{fixed_count} songs replaced with authentic studio audio!")
+
+    def quarantine_single_verifier_track(self, track_index: int):
+        """ Moves a single track to the _SORT_UNMATCHED quarantine folder """
+        if track_index >= len(self.verifier_scan_results):
+            return
+
+        res = self.verifier_scan_results[track_index]
+        old_path = res.get("file_path")
+        dest_root = self.verifier_folder_input.get().strip()
+        if not dest_root or not os.path.exists(dest_root):
+            dest_root = os.path.dirname(old_path) if old_path else ""
+
+        if not dest_root or not old_path or not os.path.exists(old_path):
+            self.verifier_status_lbl.configure(text="Track or destination folder not found.", text_color="#FB7185")
+            return
+
+        out = AudioFactChecker.quarantine_file_to_sort(
+            file_path=old_path,
+            destination_root=dest_root,
+            progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+        )
+        if out.get("success"):
+            new_path = out.get("new_path")
+            res["file_path"] = new_path
+            res["status"] = "QUARANTINED"
+            res["discrepancy_reason"] = "Isolated in _SORT_UNMATCHED folder (.plexignore)"
+
+            # Update cache
+            try:
+                cache = AudioFactChecker.load_cache()
+                if old_path in cache:
+                    del cache[old_path]
+                if os.path.exists(new_path):
+                    st = os.stat(new_path)
+                    cache[new_path] = {
+                        "mtime": st.st_mtime,
+                        "size": st.st_size,
+                        "result": res
+                    }
+                AudioFactChecker.save_cache(cache)
+            except Exception as e:
+                print(f"Error updating cache after quarantine: {e}")
+
+            tot = len(self.verifier_scan_results)
+            cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
+            mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
+            ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
+            unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
+            self.verifier_lbl_total.configure(text=f"{tot} Scanned")
+            if hasattr(self, 'verifier_lbl_covers'):
+                self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
+            self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
+            self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
+            self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+
+            self.verifier_status_lbl.configure(
+                text=f"📦 Quarantined: {os.path.basename(new_path)} -> _SORT_UNMATCHED",
+                text_color="#FB923C"
+            )
+            self.log(f"[Fact-Checker] Quarantined {os.path.basename(old_path)} to {out.get('quarantine_dir')}")
+            self.render_verifier_results()
+        else:
+            self.verifier_status_lbl.configure(
+                text=f"✗ Quarantine Failed: {out.get('error')}",
+                text_color="#FB7185"
+            )
+
+    def move_selected_verifier_tracks_to_sort(self):
+        """ Moves all selected tracks into _SORT_UNMATCHED quarantine folder """
+        selected = [item for item in self.verifier_track_items if item["var"].get() == 1]
+        if not selected:
+            self.verifier_status_lbl.configure(text="No tracks selected. Please check at least one box.", text_color="#FB7185")
+            return
+
+        dest_root = self.verifier_folder_input.get().strip()
+        if not dest_root or not os.path.exists(dest_root):
+            first_path = selected[0]["result"].get("file_path", "")
+            dest_root = os.path.dirname(first_path) if first_path else ""
+
+        if not dest_root:
+            self.verifier_status_lbl.configure(text="Invalid destination folder path.", text_color="#FB7185")
+            return
+
+        if hasattr(self, 'btn_verifier_move_to_sort'):
+            self.btn_verifier_move_to_sort.configure(state="disabled", text="Quarantining... ⏳")
+        self.verifier_progress_bar.set(0)
+
+        def run_batch_quarantine():
+            total = len(selected)
+            moved_count = 0
+            cache = AudioFactChecker.load_cache()
+
+            for i, item in enumerate(selected):
+                res = item["result"]
+                old_path = res.get("file_path")
+                if not old_path or not os.path.exists(old_path):
+                    continue
+
+                self.after(0, lambda fn=os.path.basename(old_path), idx=i+1, tot=total: self.verifier_status_lbl.configure(
+                    text=f"Quarantining [{idx}/{tot}]: {fn}...",
+                    text_color="#FB923C"
+                ))
+                self.after(0, lambda p=(i + 1) / total: self.verifier_progress_bar.set(p))
+
+                out = AudioFactChecker.quarantine_file_to_sort(
+                    file_path=old_path,
+                    destination_root=dest_root,
+                    progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+                )
+                if out.get("success"):
+                    moved_count += 1
+                    new_path = out.get("new_path")
+                    res["file_path"] = new_path
+                    res["status"] = "QUARANTINED"
+                    res["discrepancy_reason"] = "Isolated in _SORT_UNMATCHED folder (.plexignore)"
+                    if old_path in cache:
+                        del cache[old_path]
+                    if os.path.exists(new_path):
+                        try:
+                            st = os.stat(new_path)
+                            cache[new_path] = {
+                                "mtime": st.st_mtime,
+                                "size": st.st_size,
+                                "result": res
+                            }
+                        except Exception:
+                            pass
+
+            try:
+                AudioFactChecker.save_cache(cache)
+            except Exception:
+                pass
+
+            tot = len(self.verifier_scan_results)
+            cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
+            mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
+            ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
+            unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
+
+            def on_done():
+                if hasattr(self, 'btn_verifier_move_to_sort'):
+                    self.btn_verifier_move_to_sort.configure(
+                        state="normal",
+                        text="📦 Move to _SORT"
+                    )
+                self.verifier_lbl_total.configure(text=f"{tot} Scanned")
+                if hasattr(self, 'verifier_lbl_covers'):
+                    self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
+                self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
+                self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
+                self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+                self.verifier_progress_bar.set(1.0)
+                self.verifier_status_lbl.configure(
+                    text=f"✓ Quarantined {moved_count} tracks into _SORT_UNMATCHED folder!",
+                    text_color="#4ADE80"
+                )
+                self.render_verifier_results()
+                self.send_notification("Fact-Checker Quarantine", f"{moved_count} tracks quarantined to _SORT_UNMATCHED folder!")
+
+            self.after(0, on_done)
+
+        threading.Thread(target=run_batch_quarantine, daemon=True).start()
 
     def export_verifier_report(self):
         """ Exports report to desktop or file dialog """
@@ -5642,6 +6147,17 @@ class DownloaderApp(ctk.CTk):
             AudioFactChecker.export_report(self.verifier_scan_results, file_path, fmt=fmt)
             self.verifier_status_lbl.configure(text=f"Report exported to: {os.path.basename(file_path)}", text_color="#4ADE80")
             self.log(f"Fact-check report exported to: {file_path}")
+
+    def open_fact_checker_error_log(self):
+        """ Opens the trackable fact_checker_errors.log file in default text editor """
+        log_file = os.path.join(base_dir, "fact_checker_errors.log")
+        if not os.path.exists(log_file):
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fact-Checker error log initialized. No errors recorded yet.\n")
+        try:
+            os.startfile(log_file)
+        except Exception:
+            subprocess.Popen(["notepad.exe", log_file])
 
     # =========================================================================
     # --- CD Mixtape Builder Logic & Workers ---

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- resolve UI freeze, thread deadlock, scoping NameError, and ffmpeg slice encoding (70d4202)
+
 ### Added
 - optimize acoustic verifier with fast slicing, rate pacing, live streaming UI, and error logging (754a0fa)
 

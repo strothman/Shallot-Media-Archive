@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- optimize acoustic verifier with fast slicing, rate pacing, live streaming UI, and error logging (754a0fa)
+
+### Added
 - add EBU R128 audio normalization and smart bitrate capping for CD mixtapes (ba2e511)
 
 ### Added

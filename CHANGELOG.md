@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- automate metadata correction, smart remix duration filtering, and 1-click batch auto-fix (b7ec559)
+
 ### Fixed
 - resolve UI freeze, thread deadlock, scoping NameError, and ffmpeg slice encoding (70d4202)
 

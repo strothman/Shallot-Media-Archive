@@ -1766,12 +1766,12 @@ class DownloaderApp(ctk.CTk):
         lbl_workers.pack(side="left", padx=(5, 2))
         self.verifier_workers_dropdown = ctk.CTkComboBox(
             v_opts_row,
-            values=["2 Workers", "3 Workers", "4 Workers (Rec.)", "5 Workers"],
-            width=125,
+            values=["1 Worker (Safe / Overnight)", "2 Workers"],
+            width=180,
             height=26,
             font=("Segoe UI", 9)
         )
-        self.verifier_workers_dropdown.set("4 Workers (Rec.)")
+        self.verifier_workers_dropdown.set("1 Worker (Safe / Overnight)")
         self.verifier_workers_dropdown.pack(side="left", padx=(0, 10))
 
         self.btn_verifier_clear_cache = ctk.CTkButton(
@@ -5250,16 +5250,20 @@ class DownloaderApp(ctk.CTk):
         def log_cb(msg: str, is_error: bool = False):
             self.after(0, lambda m=msg, err=is_error: self.log(f"[Fact-Checker] {m}", is_error=err))
 
+        last_worker_update_time = [0.0]
         def active_worker_cb(workers: dict):
             self.verifier_active_workers = dict(workers)
-            self.after(0, update_workers_display)
+            now = time.time()
+            if now - last_worker_update_time[0] >= 0.3:
+                last_worker_update_time[0] = now
+                self.after(0, update_workers_display)
 
         def update_workers_display():
             if not self.verifier_is_scanning:
                 self.verifier_workers_lbl.configure(text="")
                 return
             if not self.verifier_active_workers:
-                self.verifier_workers_lbl.configure(text="⚡ Active: Dispatching next tracks...", text_color="#78909C")
+                self.verifier_workers_lbl.configure(text="⚡ Active: Dispatching next track...", text_color="#78909C")
                 return
 
             worker_strs = []
@@ -5270,7 +5274,7 @@ class DownloaderApp(ctk.CTk):
                 if len(fn) > 28:
                     fn = fn[:25] + "..."
                 elapsed = int(now - info.get("start_time", now))
-                warn = " ⚠️" if elapsed >= 15 else ""
+                warn = " ⚠️" if elapsed >= 25 else ""
                 worker_strs.append(f"W{idx}: {fn} ({elapsed}s{warn})")
 
             disp_text = "⚡ Active: " + "  |  ".join(worker_strs)
@@ -5282,15 +5286,21 @@ class DownloaderApp(ctk.CTk):
                     update_workers_display()
                 except Exception:
                     pass
-                self.after(500, heartbeat_loop)
+                self.after(1000, heartbeat_loop)
 
         def fmt_time(seconds: int) -> str:
             m, s = divmod(max(0, int(seconds)), 60)
             h, m = divmod(m, 60)
             return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
+        last_progress_time = [0.0]
         def progress_cb(curr: int, total: int, filename: str):
             pct = curr / max(1, total)
+            now = time.time()
+            if curr != 0 and curr != total and (now - last_progress_time[0] < 0.35):
+                return
+            last_progress_time[0] = now
+
             self.after(0, lambda: self.verifier_progress_bar.set(pct))
             self.after(0, lambda: self.verifier_counter_lbl.configure(text=f"{curr} / {total}  ({pct*100:.1f}%)"))
             if curr == 0:
@@ -5306,24 +5316,44 @@ class DownloaderApp(ctk.CTk):
                 ))
             self.after(0, lambda: self.update_taskbar_progress(int(pct * 100)))
 
+        # Incremental stats tracker to avoid expensive sum() recalculations
+        stats_counts = {
+            "total": len(self.verifier_scan_results),
+            "covers": sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED"),
+            "issues": sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH")),
+            "verified": sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED"),
+            "unknown": sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR", "RATE_LIMITED"))
+        }
+        last_stat_label_time = [0.0]
+
+        def update_stat_labels_throttled(force: bool = False):
+            now = time.time()
+            if not force and (now - last_stat_label_time[0] < 0.3):
+                return
+            last_stat_label_time[0] = now
+            self.verifier_lbl_total.configure(text=f"{stats_counts['total']} Scanned")
+            if hasattr(self, 'verifier_lbl_covers'):
+                self.verifier_lbl_covers.configure(text=f"{stats_counts['covers']} 🎭 Covers")
+            self.verifier_lbl_mismatch.configure(text=f"{stats_counts['issues']} ⚠️ Issues")
+            self.verifier_lbl_verified.configure(text=f"{stats_counts['verified']} ✅ Verified")
+            self.verifier_lbl_unrec.configure(text=f"{stats_counts['unknown']} ❓ Unknown")
+
         def item_cb(res: dict):
             self.verifier_scan_results.append(res)
             original_idx = len(self.verifier_scan_results) - 1
 
-            # Update stats
-            tot = len(self.verifier_scan_results)
-            cov = sum(1 for r in self.verifier_scan_results if r.get("status") == "COVER_DETECTED")
-            mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
-            ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
-            unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
-            self.after(0, lambda: self.verifier_lbl_total.configure(text=f"{tot} Scanned"))
-            if hasattr(self, 'verifier_lbl_covers'):
-                self.after(0, lambda: self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers"))
-            self.after(0, lambda: self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues"))
-            self.after(0, lambda: self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified"))
-            self.after(0, lambda: self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown"))
+            st = res.get("status", "")
+            stats_counts["total"] += 1
+            if st == "COVER_DETECTED":
+                stats_counts["covers"] += 1
+            if st in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"):
+                stats_counts["issues"] += 1
+            elif st == "VERIFIED":
+                stats_counts["verified"] += 1
+            elif st in ("UNRECOGNIZED", "TIMEOUT", "ERROR", "RATE_LIMITED"):
+                stats_counts["unknown"] += 1
 
-            # Live stream track row into UI
+            self.after(0, update_stat_labels_throttled)
             self.after(0, lambda r=res, idx=original_idx: self._stream_verifier_row(r, idx))
 
         def run_scan():
@@ -5331,12 +5361,13 @@ class DownloaderApp(ctk.CTk):
             use_cache = bool(self.verifier_cache_switch.get()) if hasattr(self, 'verifier_cache_switch') else True
             auto_fix = bool(self.verifier_autofix_switch.get()) if hasattr(self, 'verifier_autofix_switch') else True
             reorg = bool(self.verifier_reorg_switch.get()) if hasattr(self, 'verifier_reorg_switch') else False
-            w_str = self.verifier_workers_dropdown.get() if hasattr(self, 'verifier_workers_dropdown') else "4"
+            w_str = self.verifier_workers_dropdown.get() if hasattr(self, 'verifier_workers_dropdown') else "1"
             try:
                 num_workers = int(w_str.split()[0])
             except Exception:
-                num_workers = 4
-            self.log(f"[Fact-Checker] Concurrency: {num_workers} workers | Auto-Fix: {'ENABLED' if auto_fix else 'DISABLED'} | Reorganize: {'YES' if reorg else 'NO'}")
+                num_workers = 1
+            num_workers = max(1, min(num_workers, 2))
+            self.log(f"[Fact-Checker] Safe Overnight Mode: {num_workers} worker(s) | Auto-Fix: {'ENABLED' if auto_fix else 'DISABLED'} | Reorganize: {'YES' if reorg else 'NO'}")
             try:
                 AudioFactChecker.scan_directory(
                     root_dir=folder,
@@ -5346,7 +5377,7 @@ class DownloaderApp(ctk.CTk):
                     log_cb=log_cb,
                     cancel_event=self.verifier_cancel_event,
                     max_workers=num_workers,
-                    per_file_timeout=12.0,
+                    per_file_timeout=35.0,
                     use_cache=use_cache,
                     auto_fix=auto_fix,
                     destination_root=folder,
@@ -5354,6 +5385,7 @@ class DownloaderApp(ctk.CTk):
                 )
             except Exception as e:
                 self.log(f"Scan error: {e}", is_error=True)
+            self.after(0, lambda: update_stat_labels_throttled(force=True))
             self.after(0, self.on_verifier_scan_complete)
 
         self.after(500, heartbeat_loop)
@@ -5474,7 +5506,7 @@ class DownloaderApp(ctk.CTk):
                 continue
             if self.verifier_filter_mode == "verified" and st != "VERIFIED":
                 continue
-            if self.verifier_filter_mode == "unrec" and st not in ("UNRECOGNIZED", "TIMEOUT", "ERROR"):
+            if self.verifier_filter_mode == "unrec" and st not in ("UNRECOGNIZED", "TIMEOUT", "ERROR", "RATE_LIMITED"):
                 continue
             filtered.append((idx, res))
 
@@ -5487,8 +5519,18 @@ class DownloaderApp(ctk.CTk):
             empty_lbl.pack(pady=30)
             return
 
-        for original_idx, res in filtered:
+        MAX_DISPLAY = 250
+        for original_idx, res in filtered[:MAX_DISPLAY]:
             self._create_verifier_row_widget(res, original_idx)
+
+        if len(filtered) > MAX_DISPLAY:
+            overflow_lbl = ctk.CTkLabel(
+                self.verifier_scroll,
+                text=f"Showing first {MAX_DISPLAY} of {len(filtered)} items. Select a category tab (Issues / Covers / Verified / Unknown) or Export Report for full details.",
+                font=("Segoe UI", 10, "italic"),
+                text_color="#78909C"
+            )
+            overflow_lbl.pack(pady=15)
 
     def _stream_verifier_row(self, res: dict, original_idx: int):
         """ Dynamically adds a scanned track row to the active view in real-time as recognition finishes """
@@ -5499,6 +5541,9 @@ class DownloaderApp(ctk.CTk):
                 pass
             self.verifier_scan_live_banner = None
 
+        if len(self.verifier_track_items) >= 250:
+            return
+
         st = res.get("status", "")
         mode = getattr(self, "verifier_filter_mode", "all")
         if mode == "covers" and st != "COVER_DETECTED":
@@ -5507,7 +5552,7 @@ class DownloaderApp(ctk.CTk):
             return
         if mode == "verified" and st != "VERIFIED":
             return
-        if mode == "unrec" and st not in ("UNRECOGNIZED", "TIMEOUT", "ERROR"):
+        if mode == "unrec" and st not in ("UNRECOGNIZED", "TIMEOUT", "ERROR", "RATE_LIMITED"):
             return
 
         self._create_verifier_row_widget(res, original_idx)
@@ -5568,6 +5613,9 @@ class DownloaderApp(ctk.CTk):
         elif st == "QUARANTINED":
             badge_text = "📦 QUARANTINED"
             badge_color = "#FB923C"
+        elif st == "RATE_LIMITED":
+            badge_text = "🛑 RATE-LIMIT"
+            badge_color = "#FB7185"
         elif st == "TIMEOUT":
             badge_text = "⏳ TIMEOUT"
             badge_color = "#F59E0B"

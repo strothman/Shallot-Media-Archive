@@ -207,6 +207,7 @@ def slice_audio_segment(file_path: str, offset_seconds: float = 30.0, duration_s
 # Trackable error logging & Shazam rate-limit pacing
 _shazam_rate_lock = threading.Lock()
 _last_shazam_request_time = 0.0
+_shazam_rate_cooldown_until = 0.0
 
 def log_fact_checker_error(file_path: str, error_type: str, details: str):
     """Appends error events to a persistent trackable fact_checker_errors.log file."""
@@ -220,15 +221,27 @@ def log_fact_checker_error(file_path: str, error_type: str, details: str):
     except Exception:
         pass
 
-def pace_shazam_request(min_interval: float = 0.9):
-    """Ensures at least min_interval seconds between consecutive Shazam API queries across all threads."""
-    global _last_shazam_request_time
+def pace_shazam_request(min_interval: float = 1.8, cooldown_seconds: float = 0.0):
+    """
+    Ensures at least min_interval seconds between consecutive Shazam API queries across all threads.
+    If cooldown_seconds is provided, enforces a backoff cooldown window (e.g. after HTTP 429).
+    """
+    global _last_shazam_request_time, _shazam_rate_cooldown_until
     with _shazam_rate_lock:
         now = time.time()
+        if cooldown_seconds > 0:
+            _shazam_rate_cooldown_until = max(_shazam_rate_cooldown_until, now + cooldown_seconds)
+
+        if now < _shazam_rate_cooldown_until:
+            wait_cooldown = _shazam_rate_cooldown_until - now
+            time.sleep(wait_cooldown)
+            now = time.time()
+
         elapsed = now - _last_shazam_request_time
         if elapsed < min_interval:
             time.sleep(min_interval - elapsed)
         _last_shazam_request_time = time.time()
+
 
 
 class AudioFactChecker:
@@ -306,8 +319,14 @@ class AudioFactChecker:
         return metadata
 
     @classmethod
-    async def recognize_audio_async(cls, file_path: str, timeout: float = 12.0, deep_scan: bool = True) -> Dict:
-        """Runs acoustic waveform recognition via Shazam with pacing, rate-limit protection, and mid-track sweet-spot sampling."""
+    async def recognize_audio_async(
+        cls,
+        file_path: str,
+        timeout: float = 35.0,
+        deep_scan: bool = True,
+        log_cb: Optional[Callable[[str, bool], None]] = None
+    ) -> Dict:
+        """Runs acoustic waveform recognition via Shazam with calm pacing, rate-limit protection, and multi-slice sampling."""
         if not HAS_SHAZAM:
             return {"matched": False, "error": "shazamio package is not installed"}
 
@@ -316,12 +335,10 @@ class AudioFactChecker:
             log_fact_checker_error(norm_path, "FILE_NOT_FOUND", "Audio file could not be accessed.")
             return {"matched": False, "error": f"File not found: {file_path}"}
 
+        filename = os.path.basename(norm_path)
         shazam = Shazam()
 
-        # Enforce rate-limit pacing so Apple/Shazam never triggers HTTP 429
-        pace_shazam_request(min_interval=0.9)
-
-        # Get file duration to find optimal acoustic sweet-spot
+        # Get file duration to find optimal acoustic sweet-spots
         file_duration_s = 0.0
         try:
             aud = mutagen.File(norm_path)
@@ -330,45 +347,90 @@ class AudioFactChecker:
         except Exception:
             pass
 
-        track = {}
-        # 1. Fast slice recognition (extracts 11s snippet at ~25% or 20s in - finishes in <0.5s)
+        # Internal helper to query Shazam on a slice with backoff and retry on 429 / timeout
+        async def _query_slice(offset: float, dur: float = 11.0, max_attempts: int = 2):
+            slice_bytes = slice_audio_segment(norm_path, offset_seconds=offset, duration_seconds=dur)
+            if not slice_bytes:
+                return None, None
+
+            last_err = None
+            for attempt in range(max_attempts):
+                pace_shazam_request(min_interval=1.8)
+                try:
+                    out = await asyncio.wait_for(shazam.recognize(slice_bytes), timeout=18.0)
+                    tr = out.get("track", {})
+                    if tr and tr.get("title"):
+                        return tr, None
+                    # Clean response from Shazam with no match found
+                    return None, None
+                except (asyncio.TimeoutError, TimeoutError):
+                    last_err = "TIMEOUT"
+                    log_fact_checker_error(norm_path, "TIMEOUT", f"Shazam timeout on slice @ {int(offset)}s (attempt {attempt+1}/{max_attempts})")
+                    if attempt < max_attempts - 1:
+                        if log_cb:
+                            log_cb(f"⏳ Recognition timeout on '{filename}'. Cooling down 10s before retry...", False)
+                        pace_shazam_request(min_interval=2.0, cooldown_seconds=10.0)
+                        continue
+                except Exception as e:
+                    err_str = str(e)
+                    is_429 = "429" in err_str or "too many" in err_str.lower()
+                    if is_429:
+                        last_err = "RATE_LIMIT_429"
+                        log_fact_checker_error(norm_path, "RATE_LIMIT_429", f"HTTP 429 Too Many Requests (attempt {attempt+1}/{max_attempts})")
+                        if log_cb:
+                            log_cb(f"🛑 Shazam rate limit (HTTP 429). Pausing for 15s cooldown on '{filename}'...", True)
+                        pace_shazam_request(min_interval=2.0, cooldown_seconds=15.0)
+                        if attempt < max_attempts - 1:
+                            continue
+                    else:
+                        last_err = err_str
+                        log_fact_checker_error(norm_path, "RECOGNIZE_ERROR", err_str)
+            return None, last_err
+
+        track = None
+        slice_error = None
+
+        # 1. Fast slice recognition (extracts 11s snippet at ~25% or 15s in)
         first_offset = max(8.0, min(file_duration_s * 0.25, file_duration_s - 15.0)) if file_duration_s > 20.0 else 10.0
-        slice_bytes = slice_audio_segment(norm_path, offset_seconds=first_offset, duration_seconds=11.0)
-        if slice_bytes:
-            try:
-                out = await asyncio.wait_for(shazam.recognize(slice_bytes), timeout=6.0)
-                track = out.get("track", {})
-            except (asyncio.TimeoutError, TimeoutError):
-                pass
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str:
-                    log_fact_checker_error(norm_path, "RATE_LIMIT_429", "Shazam API rate limit reached (HTTP 429). Cooldown required.")
-                    return {"matched": False, "error": "Shazam rate limit (HTTP 429). Temporary cooldown required."}
-                else:
-                    log_fact_checker_error(norm_path, "RECOGNIZE_ERROR", err_str)
+        track, slice_error = await _query_slice(first_offset, dur=11.0, max_attempts=2)
 
         # 2. Deep mid-track sampling if first slice didn't match (sample chorus at 50%)
         if (not track or not track.get("title")) and deep_scan and file_duration_s > 30.0:
             second_offset = max(15.0, min(file_duration_s * 0.50, file_duration_s - 15.0))
-            slice_bytes2 = slice_audio_segment(norm_path, offset_seconds=second_offset, duration_seconds=11.0)
-            if slice_bytes2:
-                try:
-                    pace_shazam_request(min_interval=0.9)
-                    out2 = await asyncio.wait_for(shazam.recognize(slice_bytes2), timeout=6.0)
-                    t2 = out2.get("track", {})
-                    if t2 and t2.get("title"):
-                        track = t2
-                except Exception:
-                    pass
+            t2, err2 = await _query_slice(second_offset, dur=11.0, max_attempts=2)
+            if t2 and t2.get("title"):
+                track = t2
+                slice_error = None
+            elif err2:
+                slice_error = err2
 
-        # 3. Fallback to whole-file recognition only if slicing produced no audio bytes
-        if (not track or not track.get("title")) and not slice_bytes:
+        # 3. Third late-track sampling for long intro tracks (sample at 70%)
+        if (not track or not track.get("title")) and deep_scan and file_duration_s > 60.0:
+            third_offset = max(20.0, min(file_duration_s * 0.70, file_duration_s - 15.0))
+            t3, err3 = await _query_slice(third_offset, dur=11.0, max_attempts=2)
+            if t3 and t3.get("title"):
+                track = t3
+                slice_error = None
+            elif err3:
+                slice_error = err3
+
+        # 4. Fallback to whole-file recognition if slicing produced no audio bytes
+        if (not track or not track.get("title")) and not slice_error:
             try:
-                out_full = await asyncio.wait_for(shazam.recognize(norm_path), timeout=8.0)
+                pace_shazam_request(min_interval=1.8)
+                out_full = await asyncio.wait_for(shazam.recognize(norm_path), timeout=20.0)
                 track = out_full.get("track", {})
             except Exception:
                 pass
+
+        # If no match and a rate-limit/timeout error occurred, propagate the error!
+        if (not track or not track.get("title")) and slice_error:
+            if slice_error == "RATE_LIMIT_429":
+                return {"matched": False, "error": "Shazam rate limit (HTTP 429). Server busy."}
+            elif slice_error == "TIMEOUT":
+                return {"matched": False, "error": "Audio recognition timed out"}
+            else:
+                return {"matched": False, "error": str(slice_error)}
 
         if not track or not track.get("title"):
             return {
@@ -425,7 +487,7 @@ class AudioFactChecker:
     def verify_single_file(
         cls,
         file_path: str,
-        timeout: float = 12.0,
+        timeout: float = 35.0,
         deep_scan: bool = True,
         log_cb: Optional[Callable[[str, bool], None]] = None
     ) -> Dict:
@@ -434,12 +496,12 @@ class AudioFactChecker:
         norm_path = os.path.normpath(file_path)
         embedded = cls.extract_embedded_metadata(norm_path)
         
-        # Run recognition with strict timeout protection
+        # Run recognition with generous timeout protection
         try:
             rec_result = asyncio.run(
                 asyncio.wait_for(
-                    cls.recognize_audio_async(norm_path, timeout=timeout, deep_scan=deep_scan),
-                    timeout=timeout + 2.0
+                    cls.recognize_audio_async(norm_path, timeout=timeout, deep_scan=deep_scan, log_cb=log_cb),
+                    timeout=timeout + 15.0
                 )
             )
         except (asyncio.TimeoutError, TimeoutError):
@@ -455,7 +517,10 @@ class AudioFactChecker:
 
         if rec_result.get("error"):
             err_msg = rec_result.get("error", "Unknown error")
-            if "timed out" in err_msg.lower():
+            if "429" in err_msg or "rate limit" in err_msg.lower():
+                status = "RATE_LIMITED"
+                discrepancy_reason = "Shazam API rate limit reached (HTTP 429) - cooldown applied"
+            elif "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
                 status = "TIMEOUT"
                 discrepancy_reason = f"Recognition timed out after {int(timeout)}s (skipped hanging file)"
             else:
@@ -571,7 +636,7 @@ class AudioFactChecker:
         try:
             temp_path = path + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(cache, f, indent=2)
+                json.dump(cache, f)
             if os.path.exists(path):
                 os.remove(path)
             os.rename(temp_path, path)
@@ -596,8 +661,8 @@ class AudioFactChecker:
         active_worker_cb: Optional[Callable[[Dict[int, Dict]], None]] = None,
         log_cb: Optional[Callable[[str, bool], None]] = None,
         cancel_event: Optional[threading.Event] = None,
-        max_workers: int = 3,
-        per_file_timeout: float = 20.0,
+        max_workers: int = 1,
+        per_file_timeout: float = 35.0,
         use_cache: bool = True,
         auto_fix: bool = False,
         destination_root: Optional[str] = None,
@@ -763,14 +828,16 @@ class AudioFactChecker:
                 if active_worker_cb:
                     active_worker_cb(snapshot)
 
-                # Periodically flush cache to disk every 2 completed tracks
-                if use_cache and curr_c % 2 == 0:
+                # Periodically flush cache to disk every 25 completed tracks or 30 seconds
+                now_t = time.time()
+                if use_cache and (curr_c % 25 == 0 or now_t - getattr(cls, "_last_cache_save", 0.0) >= 30.0):
                     with lock:
+                        cls._last_cache_save = now_t
                         cls.save_cache(cache)
 
             return res
 
-        workers = max(1, min(max_workers, 5))
+        workers = max(1, min(max_workers, 2))
         try:
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = [executor.submit(process_file, fp) for fp in unscanned_files]

@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - automate metadata correction, smart remix duration filtering, and 1-click batch auto-fix (b7ec559)
 
 ### Fixed
+- prevent false Unknown acoustic matches by handling Shazam HTTP 429 rate limits, adding 15s cooldown backoff and retries
+- resolve UI freeze and lag during scans with throttled Tkinter updates, incremental stat tracking, and 250-row rendering cap
+- optimize disk I/O by batching cache saves every 25 tracks without formatting overhead instead of saving every 2 tracks
+- default to 1 Worker Safe Overnight Mode with 1.8s pacing and generous 35s per-track timeout for high acoustic accuracy
 - resolve UI freeze, thread deadlock, scoping NameError, and ffmpeg slice encoding (70d4202)
 
 ### Added

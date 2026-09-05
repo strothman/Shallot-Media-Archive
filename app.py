@@ -1731,6 +1731,22 @@ class DownloaderApp(ctk.CTk):
         self.verifier_art_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_art_switch)
 
+        self.verifier_autofix_switch = ctk.CTkSwitch(
+            v_opts_row,
+            text="Auto-Fix Confirmed Audio",
+            font=("Segoe UI", 9, "bold"),
+            progress_color="#10B981",
+            width=175,
+            height=18,
+            command=lambda: self.save_setting("verifier_auto_fix", bool(self.verifier_autofix_switch.get()))
+        )
+        if self.saved_settings.get("verifier_auto_fix", True):
+            self.verifier_autofix_switch.select()
+        else:
+            self.verifier_autofix_switch.deselect()
+        self.verifier_autofix_switch.pack(side="left", padx=(0, 10))
+        self.theme_switches.append(self.verifier_autofix_switch)
+
         self.verifier_cache_switch = ctk.CTkSwitch(
             v_opts_row,
             text="Fast Resume (Cache)",
@@ -1958,6 +1974,18 @@ class DownloaderApp(ctk.CTk):
             command=self.redownload_selected_verifier_tracks
         )
         self.btn_verifier_redownload_selected.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_verifier_autofix_all = ctk.CTkButton(
+            v_act_btns,
+            text="⚡  Auto-Fix All Issues",
+            font=("Segoe UI", 11, "bold"),
+            height=36,
+            corner_radius=8,
+            fg_color="#059669",
+            hover_color="#10B981",
+            command=self.autofix_all_discrepancies
+        )
+        self.btn_verifier_autofix_all.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.btn_verifier_fix_selected = ctk.CTkButton(
             v_act_btns,
@@ -5301,12 +5329,14 @@ class DownloaderApp(ctk.CTk):
         def run_scan():
             self.log(f"Starting deep acoustic library fact-check on: {folder}")
             use_cache = bool(self.verifier_cache_switch.get()) if hasattr(self, 'verifier_cache_switch') else True
+            auto_fix = bool(self.verifier_autofix_switch.get()) if hasattr(self, 'verifier_autofix_switch') else True
+            reorg = bool(self.verifier_reorg_switch.get()) if hasattr(self, 'verifier_reorg_switch') else False
             w_str = self.verifier_workers_dropdown.get() if hasattr(self, 'verifier_workers_dropdown') else "4"
             try:
                 num_workers = int(w_str.split()[0])
             except Exception:
                 num_workers = 4
-            self.log(f"[Fact-Checker] Concurrency set to {num_workers} parallel workers.")
+            self.log(f"[Fact-Checker] Concurrency: {num_workers} workers | Auto-Fix: {'ENABLED' if auto_fix else 'DISABLED'} | Reorganize: {'YES' if reorg else 'NO'}")
             try:
                 AudioFactChecker.scan_directory(
                     root_dir=folder,
@@ -5317,7 +5347,10 @@ class DownloaderApp(ctk.CTk):
                     cancel_event=self.verifier_cancel_event,
                     max_workers=num_workers,
                     per_file_timeout=12.0,
-                    use_cache=use_cache
+                    use_cache=use_cache,
+                    auto_fix=auto_fix,
+                    destination_root=folder,
+                    reorganize=reorg
                 )
             except Exception as e:
                 self.log(f"Scan error: {e}", is_error=True)
@@ -5340,6 +5373,8 @@ class DownloaderApp(ctk.CTk):
         self.verifier_workers_lbl.configure(text="")
         self.btn_verifier_start_scan.configure(state="normal", text="🔍  Scan & Fact-Check")
         self.btn_verifier_fix_selected.configure(state="normal")
+        if hasattr(self, 'btn_verifier_autofix_all'):
+            self.btn_verifier_autofix_all.configure(state="normal")
         if hasattr(self, 'btn_verifier_redownload_selected'):
             self.btn_verifier_redownload_selected.configure(state="normal")
         self.btn_verifier_export.configure(state="normal")
@@ -5810,6 +5845,71 @@ class DownloaderApp(ctk.CTk):
                 ))
 
         threading.Thread(target=run_fix, daemon=True).start()
+
+    def autofix_all_discrepancies(self):
+        """ Automatically fixes and re-tags all tracks with confirmed audio matches and discrepancies in batch """
+        candidates = [
+            res for res in self.verifier_scan_results
+            if res.get("recognized", {}).get("matched") and res.get("status") in ("METADATA_TYPO", "MISMATCH", "COVER_DETECTED")
+        ]
+        if not candidates:
+            self.verifier_status_lbl.configure(
+                text="No unverified tracks with confirmed audio found to auto-fix.",
+                text_color="#38BDF8"
+            )
+            return
+
+        dest_root = self.verifier_folder_input.get().strip()
+        reorg = bool(self.verifier_reorg_switch.get())
+
+        if hasattr(self, 'btn_verifier_autofix_all'):
+            self.btn_verifier_autofix_all.configure(state="disabled", text="Auto-Fixing All... ⏳")
+        self.btn_verifier_fix_selected.configure(state="disabled")
+        self.verifier_progress_bar.set(0)
+        self.power_light.configure(text="● AUTO-FIXING", text_color="#10B981")
+
+        def run_autofix_worker():
+            total = len(candidates)
+            fixed_count = 0
+            for idx, res in enumerate(candidates, start=1):
+                pct = idx / total
+                self.after(0, lambda p=pct: self.verifier_progress_bar.set(p))
+                self.after(0, lambda i=idx, t=total: self.verifier_counter_lbl.configure(text=f"{i} / {t}"))
+                self.after(0, lambda r=res, i=idx, t=total: self.verifier_status_lbl.configure(
+                    text=f"Auto-Fixing ({i}/{t}): {r.get('filename')[:40]}",
+                    text_color="#38BDF8"
+                ))
+
+                out = AudioFactChecker.fix_and_retag(
+                    file_path=res.get("file_path"),
+                    verified_info=res,
+                    destination_root=dest_root,
+                    reorganize=reorg,
+                    progress_cb=lambda m: self.log(f"[Fact-Checker] {m}")
+                )
+                if out.get("success"):
+                    fixed_count += 1
+                    res["status"] = "VERIFIED"
+                    res["file_path"] = out.get("new_path", res.get("file_path"))
+                    res["filename"] = os.path.basename(res["file_path"])
+                    res["discrepancy_reason"] = "Auto-corrected from confirmed acoustic match"
+
+            if hasattr(self, 'btn_verifier_autofix_all'):
+                self.after(0, lambda: self.btn_verifier_autofix_all.configure(state="normal", text="⚡  Auto-Fix All Issues"))
+            self.after(0, lambda: self.btn_verifier_fix_selected.configure(state="normal"))
+            self.after(0, lambda: self.verifier_status_lbl.configure(
+                text=f"✓ Complete! {fixed_count} / {total} confirmed tracks auto-corrected.",
+                text_color="#4ADE80"
+            ))
+            self.after(0, lambda: self.update_taskbar_progress(0))
+            self.after(0, lambda: self.power_light.configure(
+                text=getattr(self, 'theme_cfg', {}).get("status_text", "● READY"),
+                text_color=getattr(self, 'theme_cfg', {}).get("status_color", "#38BDF8")
+            ))
+            self.after(0, self.render_verifier_results)
+            self.send_notification("Auto-Fix Complete", f"Successfully auto-corrected {fixed_count} tracks based on confirmed audio fingerprints!")
+
+        threading.Thread(target=run_autofix_worker, daemon=True).start()
 
     def fix_selected_verifier_tracks(self):
         """ Fixes all selected tracks in batch """

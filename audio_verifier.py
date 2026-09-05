@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional
 
@@ -66,15 +67,19 @@ SUPPORTED_AUDIO_EXTENSIONS = {
 }
 
 VALID_CACHE_STATUSES = {
-    "VERIFIED", "MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH", "UNRECOGNIZED"
+    "VERIFIED", "MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"
 }
 
 
 def normalize_text(text: str) -> str:
-    """Normalizes string for fuzzy comparison by removing noise, feats, remasters, punctuation."""
+    """Normalizes string for fuzzy comparison by removing noise, feats, remasters, punctuation, and accents."""
     if not text:
         return ""
-    s = text.lower().strip()
+    # Strip accents / diacritics (e.g. Gábor Szabó -> Gabor Szabo)
+    s = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8')
+    s = s.lower().strip()
+    # Normalize artist separators / joiners (e.g. '/' or '+' or '&' -> ' and ')
+    s = re.sub(r'[\/\\+&]', ' and ', s)
     # Remove featuring blocks
     s = re.sub(r'[\(\[\{]\s*(feat\.?|ft\.?|featuring)[^\)\]\}]*[\)\]\}]', '', s, flags=re.IGNORECASE)
     s = re.sub(r'\s+(feat\.?|ft\.?|featuring)\s+.*$', '', s, flags=re.IGNORECASE)
@@ -499,7 +504,14 @@ class AudioFactChecker:
                 if log_cb:
                     log_cb(f"[TYPO] {filename} | Tag: '{e_title}' vs Audio: '{v_title}'", False)
             elif artist_sim >= 0.70 and title_sim >= 0.65:
-                if dur_diff_s >= 25.0:
+                # Check if it's an intended extended/remix/live/acoustic/session version
+                title_lower = f"{e_title} {v_title} {filename}".lower()
+                is_intended_extended = any(kw in title_lower for kw in [
+                    "remix", "mix", "extended", "live", "acoustic", "session",
+                    "monologue", "version", "deluxe", "bonus", "edit", "unplugged",
+                    "instrumental", "orchestral"
+                ])
+                if dur_diff_s >= 25.0 and not is_intended_extended:
                     status = "DURATION_MISMATCH"
                     discrepancy_reason = f"Duration mismatch: File is {int(file_dur_ms/1000)}s vs Studio {int(ref_dur_ms/1000)}s (likely music video with skits or live version)"
                     if log_cb:
@@ -586,11 +598,15 @@ class AudioFactChecker:
         cancel_event: Optional[threading.Event] = None,
         max_workers: int = 3,
         per_file_timeout: float = 20.0,
-        use_cache: bool = True
+        use_cache: bool = True,
+        auto_fix: bool = False,
+        destination_root: Optional[str] = None,
+        reorganize: bool = False
     ) -> List[Dict]:
         """
         Recursively scans directory, verifies all audio files concurrently with timeouts,
-        automatically resumes from disk cache, and yields progress callbacks.
+        automatically resumes from disk cache, auto-corrects confirmed audio discrepancies when requested,
+        and yields progress callbacks.
         """
         if not os.path.exists(root_dir):
             raise ValueError(f"Directory not found: {root_dir}")
@@ -677,6 +693,30 @@ class AudioFactChecker:
             res = None
             try:
                 res = cls.verify_single_file(file_path, timeout=per_file_timeout, log_cb=log_cb)
+                # Auto-fix confirmed audio discrepancies if requested
+                if auto_fix and res and res.get("recognized", {}).get("matched") and res.get("status") in ("METADATA_TYPO", "MISMATCH", "COVER_DETECTED"):
+                    try:
+                        with lock:
+                            if tid in active_workers:
+                                active_workers[tid]["status"] = "Auto-Fixing Tags"
+                        dest = destination_root or root_dir
+                        fix_out = cls.fix_and_retag(
+                            file_path=file_path,
+                            verified_info=res,
+                            destination_root=dest,
+                            reorganize=reorganize,
+                            progress_cb=None
+                        )
+                        if fix_out.get("success"):
+                            res["status"] = "VERIFIED"
+                            res["file_path"] = fix_out.get("new_path", file_path)
+                            res["filename"] = os.path.basename(res["file_path"])
+                            res["discrepancy_reason"] = "Auto-corrected from confirmed acoustic match"
+                            if log_cb:
+                                log_cb(f"[AUTO-FIX] {filename} -> Tagged & Verified as '{fix_out.get('verified_artist')} - {fix_out.get('verified_title')}'", False)
+                    except Exception as fe:
+                        if log_cb:
+                            log_cb(f"[AUTO-FIX ERROR] {filename}: {fe}", True)
             except Exception as e:
                 res = {
                     "file_path": file_path,
@@ -700,10 +740,13 @@ class AudioFactChecker:
                     snapshot = {k: v.copy() for k, v in active_workers.items()}
 
                     # Store in persistent cache
+                    target_fp = res.get("file_path", file_path) if res else file_path
                     if use_cache and res and res.get("status") in VALID_CACHE_STATUSES:
                         try:
-                            st = os.stat(file_path)
-                            cache[file_path] = {
+                            if target_fp != file_path and file_path in cache:
+                                cache.pop(file_path, None)
+                            st = os.stat(target_fp)
+                            cache[target_fp] = {
                                 "mtime": st.st_mtime,
                                 "size": st.st_size,
                                 "result": res
@@ -881,6 +924,32 @@ class AudioFactChecker:
                     cls._cleanup_empty_folders(orig_dir, stop_at=destination_root)
                 except Exception:
                     pass
+
+            # Sync updated result directly into persistent cache
+            try:
+                cache = cls.load_cache()
+                if file_path in cache and new_file_path != file_path:
+                    cache.pop(file_path, None)
+                if os.path.exists(new_file_path):
+                    st = os.stat(new_file_path)
+                    cache[new_file_path] = {
+                        "mtime": st.st_mtime,
+                        "size": st.st_size,
+                        "result": {
+                            "file_path": new_file_path,
+                            "filename": os.path.basename(new_file_path),
+                            "status": "VERIFIED",
+                            "discrepancy_reason": "Re-tagged with verified acoustic match",
+                            "artist_similarity": 1.0,
+                            "title_similarity": 1.0,
+                            "current": track_payload,
+                            "recognized": rec,
+                            "reference": verified_info.get("reference")
+                        }
+                    }
+                    cls.save_cache(cache)
+            except Exception:
+                pass
 
             return {
                 "success": True,

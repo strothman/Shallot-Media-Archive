@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- resolve false unknowns with Shazam 429 backoff, 1-worker overnight mode, and UI throttling (5ca1a03)
+
+### Changed
+- refactor: modularize core media utilities, SQLite cache, and parallel indexing (75a375c)
+
 ### Added
 - automate metadata correction, smart remix duration filtering, and 1-click batch auto-fix (b7ec559)
 

@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- add universal smart input dispatcher and dark-elevation CToolTip system (23f503c)
+
+### Added
 - add in-app 10s audio auditioning and side-by-side metadata diff modal (266f991)
 
 ### Added

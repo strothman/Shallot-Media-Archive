@@ -21,23 +21,23 @@ import urllib.request
 import urllib.parse
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Callable
 
-import mutagen
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TPOS
-from mutagen.flac import FLAC
-from mutagen.mp4 import MP4
-
-BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-CREATION_FLAGS_BACKGROUND = (
-    (subprocess.CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
-    if os.name == 'nt' else 0
+from core import (
+    BELOW_NORMAL_PRIORITY_CLASS,
+    CREATION_FLAGS_BACKGROUND,
+    SUPPORTED_AUDIO_EXTENSIONS,
+    LOSSLESS_EXTENSIONS,
+    normalize_string,
+    sanitize_filename,
+    clean_display_title,
+    clean_display_artist,
+    write_car_optimized_tags,
+    get_track_bitrate_kbps,
+    should_transcode_track,
+    VerifierDatabase,
 )
-
-SUPPORTED_AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".alac"
-}
-LOSSLESS_EXTENSIONS = {".flac", ".wav", ".aiff", ".alac"}
 
 LASTFM_API_KEY = "b25b959554ed76058ac220b7b2e0a026"
 
@@ -76,140 +76,6 @@ CAPACITY_PRESETS = {
         "display_limit": "73m 45s / 74m"
     }
 }
-
-
-def normalize_string(text: str) -> str:
-    """Normalizes string for fuzzy title/artist matching."""
-    if not text:
-        return ""
-    text = text.lower()
-    # Remove bracketed/parenthetical clutter: (feat. ...), (remastered ...), [official video]
-    text = re.sub(r'[\(\[\{].*?[\)\]\}]', '', text)
-    # Remove common featuring patterns
-    text = re.sub(r'\b(feat|ft|featuring|with|prod|produced by)\b.*', '', text)
-    # Remove punctuation
-    text = re.sub(r'[^\w\s]', '', text)
-    # Collapse multiple spaces
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-
-def sanitize_filename(name: str, max_len: int = 80) -> str:
-    """Cleans names for Windows filenames."""
-    sanitized = re.sub(r'[\\/*?:"<>|]', '', name).strip()
-    sanitized = re.sub(r'\s+', ' ', sanitized)
-    return sanitized[:max_len].strip() or "Track"
-
-
-CLEAN_NOISE_REGEX = re.compile(
-    r'[\(\[\{]\s*(?:official\s*(?:music\s*)?video|official\s*audio|official\s*hd|lyric\s*video|music\s*video|audio\s*only|full\s*audio|visualizer|hd|hq|1080p|4k|remaster(?:ed)?(?:\s*\d{4})?|video|lyrics?|audio|official|original\s*mix)\s*[\)\]\}]',
-    re.IGNORECASE
-)
-
-
-def clean_display_title(raw_title: str) -> str:
-    """
-    Cleans YouTube clutter, bracketed bloat, and track numbering prefixes from song titles
-    so car stereos (e.g. Ford SYNC) display clean, legible song titles immediately.
-    """
-    if not raw_title:
-        return "Unknown Track"
-    t = raw_title.strip()
-    # Remove leading track number patterns like "01. ", "01 - ", "1 "
-    t = re.sub(r'^\d+\s*[-_.]\s*', '', t)
-    # Remove noise patterns: (Official Audio), [1080p], etc.
-    t = CLEAN_NOISE_REGEX.sub('', t)
-    # Remove empty leftover brackets
-    t = re.sub(r'[\(\[\{]\s*[\)\]\}]', '', t)
-    t = re.sub(r'\s+', ' ', t).strip(' -_.,;:')
-    return t or raw_title.strip()
-
-
-def clean_display_artist(raw_artist: str) -> str:
-    """Cleans artist names for clean automotive display."""
-    if not raw_artist:
-        return "Unknown Artist"
-    a = raw_artist.strip()
-    a = CLEAN_NOISE_REGEX.sub('', a)
-    a = re.sub(r'[\(\[\{]\s*[\)\]\}]', '', a)
-    a = re.sub(r'\s+', ' ', a).strip(' -_.,;:')
-    return a or raw_artist.strip()
-
-
-def write_car_optimized_tags(
-    file_path: str,
-    artist: str,
-    title: str,
-    album: str,
-    track_num: int,
-    total_tracks: int
-) -> bool:
-    """
-    Writes clean, automotive-optimized ID3v2.3 (or MP4/FLAC) metadata.
-    100% compatible with Ford SYNC (2016 Ford Fusion) and in-dash CD players:
-    - Sets ID3v2.3 standard (no ID3v2.4 parse failure)
-    - Syncs TRCK frame to match mixtape sequence number (track_num/total_tracks)
-    - Sets cohesive TALB album name so car heads group disc as 1 unified album
-    - Cleans noise and web junk from song titles and artists
-    """
-    if not os.path.exists(file_path):
-        return False
-
-    ext = os.path.splitext(file_path)[1].lower()
-    clean_art = clean_display_artist(artist)
-    clean_tit = clean_display_title(title)
-    clean_alb = album.strip() or "CD Mixtape"
-    trck_str = f"{track_num}/{total_tracks}"
-
-    try:
-        if ext == ".mp3":
-            try:
-                tags = ID3(file_path)
-            except Exception:
-                tags = ID3()
-
-            tags["TIT2"] = TIT2(encoding=3, text=clean_tit)
-            tags["TPE1"] = TPE1(encoding=3, text=clean_art)
-            tags["TALB"] = TALB(encoding=3, text=clean_alb)
-            tags["TRCK"] = TRCK(encoding=3, text=trck_str)
-            tags["TPOS"] = TPOS(encoding=3, text="1/1")
-            
-            # Save strictly as ID3v2.3 for car stereo compatibility
-            tags.save(file_path, v2_version=3)
-            return True
-
-        elif ext in (".m4a", ".mp4", ".aac", ".alac"):
-            try:
-                mp4 = MP4(file_path)
-                mp4["\xa9nam"] = [clean_tit]
-                mp4["\xa9ART"] = [clean_art]
-                mp4["\xa9alb"] = [clean_alb]
-                mp4["trkn"] = [(track_num, total_tracks)]
-                mp4["disk"] = [(1, 1)]
-                mp4.save()
-                return True
-            except Exception:
-                pass
-
-        elif ext == ".flac":
-            try:
-                flac = FLAC(file_path)
-                flac["title"] = clean_tit
-                flac["artist"] = clean_art
-                flac["album"] = clean_alb
-                flac["tracknumber"] = str(track_num)
-                flac["totaltracks"] = str(total_tracks)
-                flac["discnumber"] = "1"
-                flac["totaldiscs"] = "1"
-                flac.save()
-                return True
-            except Exception:
-                pass
-
-    except Exception as e:
-        print(f"[CDMixtapeExporter] Tagging error for '{file_path}': {e}")
-
-    return False
 
 
 class SpotifyRecommender:
@@ -491,19 +357,65 @@ class LocalLibraryIndex:
         self.artists_map = {}
         self.artist_display_names = {}
 
-        for idx, file_path in enumerate(found_paths):
-            if progress_callback and (idx % 25 == 0 or idx == total_files - 1):
-                progress_callback(idx + 1, total_files, os.path.basename(file_path))
+        db = VerifierDatabase.get_instance()
+        cached_map = db.get_library_index_map(prefix=self.root_dir)
 
-            info = self._read_track_info(file_path)
-            if info:
-                self.tracks.append(info)
-                norm_art = normalize_string(info["artist"])
-                if norm_art:
-                    if norm_art not in self.artists_map:
-                        self.artists_map[norm_art] = []
-                        self.artist_display_names[norm_art] = info["artist"]
-                    self.artists_map[norm_art].append(info)
+        to_scan = []
+        cached_tracks = []
+
+        for file_path in found_paths:
+            cached = cached_map.get(file_path)
+            is_valid = False
+            if cached:
+                try:
+                    st = os.stat(file_path)
+                    if abs(cached.get("mtime", 0.0) - st.st_mtime) <= 2.0 and cached.get("size_bytes") == st.st_size:
+                        cached_tracks.append(cached)
+                        is_valid = True
+                except Exception:
+                    pass
+            if not is_valid:
+                to_scan.append(file_path)
+
+        for trk in cached_tracks:
+            self.tracks.append(trk)
+            norm_art = normalize_string(trk.get("artist", ""))
+            if norm_art:
+                if norm_art not in self.artists_map:
+                    self.artists_map[norm_art] = []
+                    self.artist_display_names[norm_art] = trk.get("artist", "")
+                self.artists_map[norm_art].append(trk)
+
+        if to_scan:
+            max_workers = min(12, max(2, (os.cpu_count() or 4) * 2))
+            newly_scanned = []
+            done_count = 0
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_path = {executor.submit(self._read_track_info, fp): fp for fp in to_scan}
+                for fut in as_completed(future_to_path):
+                    done_count += 1
+                    fp = future_to_path[fut]
+                    if progress_callback and (done_count % 25 == 0 or done_count == len(to_scan)):
+                        progress_callback(len(cached_tracks) + done_count, total_files, os.path.basename(fp))
+                    try:
+                        info = fut.result()
+                        if info:
+                            newly_scanned.append(info)
+                            self.tracks.append(info)
+                            norm_art = normalize_string(info.get("artist", ""))
+                            if norm_art:
+                                if norm_art not in self.artists_map:
+                                    self.artists_map[norm_art] = []
+                                    self.artist_display_names[norm_art] = info.get("artist", "")
+                                self.artists_map[norm_art].append(info)
+                    except Exception:
+                        pass
+
+            if newly_scanned:
+                db.put_library_tracks(newly_scanned)
+        else:
+            if progress_callback:
+                progress_callback(total_files, total_files, "Loaded from fast index cache")
 
         display_names = sorted(list(self.artist_display_names.values()), key=lambda s: s.lower())
         self.all_artists = display_names
@@ -522,7 +434,11 @@ class LocalLibraryIndex:
             album = ""
             duration_s = 0.0
 
-            audio = mutagen.File(file_path, easy=True)
+            audio = None
+            try:
+                audio = mutagen.File(file_path, easy=True)
+            except Exception:
+                pass
             if audio is not None:
                 if audio.info and hasattr(audio.info, "length"):
                     duration_s = float(audio.info.length)
@@ -570,6 +486,7 @@ class LocalLibraryIndex:
             return {
                 "file_path": file_path,
                 "filename": os.path.basename(file_path),
+                "mtime": float(stat.st_mtime),
                 "artist": artist.strip(),
                 "title": title.strip(),
                 "album": album.strip(),
@@ -619,31 +536,6 @@ def is_valid_mixtape_track(trk: Dict, max_dur_s: int = 270) -> bool:
     return True
 
 
-def get_track_bitrate_kbps(trk: Dict) -> int:
-    """Estimates average bitrate in kbps of a track."""
-    dur = trk.get("duration_s", 0) or 0
-    size = trk.get("size_bytes", 0) or 0
-    if dur > 5 and size > 1024:
-        kbps = int((size * 8) / dur / 1000)
-        return max(32, min(320, kbps))
-    return 256
-
-
-def should_transcode_track(trk: Dict, squeeze_mode: str, target_kbps: int) -> bool:
-    """Determines whether a track should be transcoded to reduce filesize."""
-    if squeeze_mode == "none":
-        return False
-    if squeeze_mode == "lossless_only":
-        return trk.get("is_lossless", False)
-    # squeeze_mode == "all" (compress lossless and any file with higher bitrate than target)
-    if trk.get("is_lossless", False):
-        return True
-    dur = trk.get("duration_s", 0) or 210
-    if dur > 0:
-        est_curr_kbps = int((trk.get("size_bytes", 0) * 8) / dur / 1000)
-        if est_curr_kbps > target_kbps + 15:
-            return True
-    return False
 
 
 class CDMixtapePlanner:

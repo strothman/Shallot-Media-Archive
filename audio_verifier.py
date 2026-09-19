@@ -48,12 +48,19 @@ CREATION_FLAGS_BACKGROUND = (
 )
 
 import mutagen  # noqa: E402
-from spotify_sync import (  # noqa: E402
+from core import (  # noqa: E402
     LyricsFetcher,
     PlexampTagger,
     ReplayGainCalculator,
     safe_move_file,
-    sanitize_filename
+    sanitize_filename,
+    normalize_text,
+    is_censored_match,
+    string_similarity,
+    slice_audio_segment,
+    CREATION_FLAGS_BACKGROUND,
+    SUPPORTED_AUDIO_EXTENSIONS,
+    VerifierDatabase,
 )
 
 try:
@@ -62,87 +69,12 @@ try:
 except ImportError:
     HAS_SHAZAM = False
 
-SUPPORTED_AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".alac"
-}
 
 VALID_CACHE_STATUSES = {
     "VERIFIED", "MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"
 }
 
 
-def normalize_text(text: str) -> str:
-    """Normalizes string for fuzzy comparison by removing noise, feats, remasters, punctuation, and accents."""
-    if not text:
-        return ""
-    # Strip accents / diacritics (e.g. Gábor Szabó -> Gabor Szabo)
-    s = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8')
-    s = s.lower().strip()
-    # Normalize artist separators / joiners (e.g. '/' or '+' or '&' -> ' and ')
-    s = re.sub(r'[\/\\+&]', ' and ', s)
-    # Remove featuring blocks
-    s = re.sub(r'[\(\[\{]\s*(feat\.?|ft\.?|featuring)[^\)\]\}]*[\)\]\}]', '', s, flags=re.IGNORECASE)
-    s = re.sub(r'\s+(feat\.?|ft\.?|featuring)\s+.*$', '', s, flags=re.IGNORECASE)
-    # Remove common tags
-    s = re.sub(r'[\(\[\{]\s*(remaster(ed)?|live|official|audio|video|explicit|clean|deluxe|bonus|version|mix|edit|mono|stereo)[^\)\]\}]*[\)\]\}]', '', s, flags=re.IGNORECASE)
-    # Remove track numbers at start
-    s = re.sub(r'^\d+[\s\.\-_]+', '', s)
-    # Replace punctuation and symbols with single space
-    s = re.sub(r'[^a-z0-9\s]', ' ', s)
-    # Collapse whitespace
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
-
-
-def is_censored_match(s1: str, s2: str) -> bool:
-    """Checks if s2 is an asterisk/bullet censored version of s1 (e.g. Dickhead vs D******d)."""
-    if not s1 or not s2:
-        return False
-    w1 = s1.lower().strip()
-    w2 = s2.lower().strip()
-    if w1 == w2:
-        return True
-    if '*' in w2 or '•' in w2:
-        p = re.escape(w2).replace(r'\*', '.').replace(r'\•', '.')
-        try:
-            if re.fullmatch(p, w1):
-                return True
-        except Exception:
-            pass
-    if '*' in w1 or '•' in w1:
-        p = re.escape(w1).replace(r'\*', '.').replace(r'\•', '.')
-        try:
-            if re.fullmatch(p, w2):
-                return True
-        except Exception:
-            pass
-    return False
-
-
-def string_similarity(s1: str, s2: str) -> float:
-    """Computes token set similarity ratio between two normalized strings with censorship handling."""
-    if is_censored_match(s1, s2):
-        return 1.0
-
-    n1 = normalize_text(s1)
-    n2 = normalize_text(s2)
-    if not n1 and not n2:
-        return 1.0
-    if not n1 or not n2:
-        return 0.0
-    if n1 == n2 or is_censored_match(n1, n2):
-        return 1.0
-    if n1 in n2 or n2 in n1:
-        return 0.90
-
-    tokens1 = set(n1.split())
-    tokens2 = set(n2.split())
-    if not tokens1 or not tokens2:
-        return 0.0
-
-    intersection = tokens1.intersection(tokens2)
-    union = tokens1.union(tokens2)
-    return len(intersection) / len(union)
 
 
 def fetch_reference_metadata(artist: str, title: str) -> Optional[Dict]:
@@ -175,33 +107,6 @@ def fetch_reference_metadata(artist: str, title: str) -> Optional[Dict]:
     return None
 
 
-def slice_audio_segment(file_path: str, offset_seconds: float = 30.0, duration_seconds: float = 12.0) -> Optional[bytes]:
-    """Extracts a slice from file_path as MP3 bytes using bundled ffmpeg for fast acoustic scanning."""
-    norm_path = os.path.normpath(file_path)
-    if not os.path.exists(norm_path):
-        return None
-    try:
-        ffmpeg_bin = os.path.join(base_dir, "ffmpeg.exe") if os.path.exists(os.path.join(base_dir, "ffmpeg.exe")) else "ffmpeg"
-        cmd = [
-            ffmpeg_bin,
-            "-threads", "2",
-            "-nostats",
-            "-loglevel", "error",
-            "-ss", f"{max(0.0, offset_seconds):.2f}",
-            "-t", f"{duration_seconds:.2f}",
-            "-i", norm_path,
-            "-f", "mp3",
-            "-ac", "2",
-            "-ar", "44100",
-            "pipe:1"
-        ]
-        flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        proc = subprocess.run(cmd, capture_output=True, creationflags=flags, timeout=12)
-        if proc.returncode == 0 and len(proc.stdout) > 1000:
-            return proc.stdout
-    except Exception:
-        pass
-    return None
 
 
 # Trackable error logging & Shazam rate-limit pacing
@@ -615,40 +520,31 @@ class AudioFactChecker:
         }
 
     @classmethod
+    def get_db(cls) -> VerifierDatabase:
+        return VerifierDatabase.get_instance()
+
+    @classmethod
     def get_cache_path(cls) -> str:
-        exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(exe_dir, "verifier_cache.json")
+        return VerifierDatabase.get_default_db_path()
 
     @classmethod
     def load_cache(cls, cache_path: Optional[str] = None) -> Dict:
-        path = cache_path or cls.get_cache_path()
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {}
+        """Loads all cached tracks from the SQLite verification database."""
+        return cls.get_db().load_all()
 
     @classmethod
     def save_cache(cls, cache: Dict, cache_path: Optional[str] = None):
-        path = cache_path or cls.get_cache_path()
-        try:
-            temp_path = path + ".tmp"
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(cache, f)
-            if os.path.exists(path):
-                os.remove(path)
-            os.rename(temp_path, path)
-        except Exception as e:
-            print(f"Error saving verifier cache: {e}")
+        """Persists cache records to SQLite database."""
+        cls.get_db().save_all(cache)
 
     @classmethod
     def clear_cache(cls, cache_path: Optional[str] = None):
-        path = cache_path or cls.get_cache_path()
-        if os.path.exists(path):
+        """Clears all records from SQLite cache and removes legacy JSON cache if present."""
+        cls.get_db().clear()
+        legacy_json = os.path.join(os.path.dirname(cls.get_cache_path()), "verifier_cache.json")
+        if os.path.exists(legacy_json):
             try:
-                os.remove(path)
+                os.remove(legacy_json)
             except Exception:
                 pass
 
@@ -804,7 +700,7 @@ class AudioFactChecker:
                     results.append(res)
                     snapshot = {k: v.copy() for k, v in active_workers.items()}
 
-                    # Store in persistent cache
+                    # Store in persistent SQLite cache immediately
                     target_fp = res.get("file_path", file_path) if res else file_path
                     if use_cache and res and res.get("status") in VALID_CACHE_STATUSES:
                         try:
@@ -816,6 +712,10 @@ class AudioFactChecker:
                                 "size": st.st_size,
                                 "result": res
                             }
+                            # Instant atomic SQLite write
+                            cls.get_db().put_track(target_fp, st.st_mtime, st.st_size, res)
+                            if target_fp != file_path:
+                                cls.get_db().delete_track(file_path)
                         except Exception:
                             pass
 
@@ -827,13 +727,6 @@ class AudioFactChecker:
 
                 if active_worker_cb:
                     active_worker_cb(snapshot)
-
-                # Periodically flush cache to disk every 25 completed tracks or 30 seconds
-                now_t = time.time()
-                if use_cache and (curr_c % 25 == 0 or now_t - getattr(cls, "_last_cache_save", 0.0) >= 30.0):
-                    with lock:
-                        cls._last_cache_save = now_t
-                        cls.save_cache(cache)
 
             return res
 

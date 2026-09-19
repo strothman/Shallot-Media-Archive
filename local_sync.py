@@ -15,24 +15,17 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Callable
 import mutagen
 
-from spotify_sync import (
+from core import (
     PlexampTagger,
     ReplayGainCalculator,
     LyricsFetcher,
     sanitize_filename,
-    safe_move_file
+    safe_move_file,
+    BELOW_NORMAL_PRIORITY_CLASS,
+    CREATION_FLAGS_BACKGROUND,
+    SUPPORTED_AUDIO_EXTENSIONS,
 )
 from youtube_sync import YouTubeTitleCleaner, YouTubeMetadataEnricher
-
-BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-CREATION_FLAGS_BACKGROUND = (
-    (subprocess.CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
-    if os.name == 'nt' else 0
-)
-
-SUPPORTED_AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".alac"
-}
 
 
 class LocalAudioScanner:
@@ -58,10 +51,11 @@ class LocalAudioScanner:
         if not found_files:
             raise RuntimeError(f"No supported audio files found in: {root_dir}")
 
-        parsed_tracks = []
-        for idx, file_path in enumerate(found_files, start=1):
-            info = cls.extract_file_metadata(file_path, root_dir, idx, len(found_files))
-            parsed_tracks.append(info)
+        total_count = len(found_files)
+        max_workers = min(12, max(2, (os.cpu_count() or 4) * 2))
+        items_args = [(fp, root_dir, idx, total_count) for idx, fp in enumerate(found_files, start=1)]
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            parsed_tracks = list(executor.map(lambda a: cls.extract_file_metadata(*a), items_args))
 
         folder_name = os.path.basename(os.path.normpath(root_dir)) or "Local Music Collection"
 

@@ -18,18 +18,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Callable
 from PIL import Image
 
-from spotify_sync import (
+from core import (
     PlexampTagger,
     ReplayGainCalculator,
     LyricsFetcher,
     sanitize_filename,
-    safe_move_file
-)
-
-BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-CREATION_FLAGS_BACKGROUND = (
-    (subprocess.CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
-    if os.name == 'nt' else 0
+    safe_move_file,
+    BELOW_NORMAL_PRIORITY_CLASS,
+    CREATION_FLAGS_BACKGROUND,
 )
 
 

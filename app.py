@@ -29,6 +29,7 @@ from youtube_sync import YouTubeFetcher, YouTubePlexampPipeline
 from local_sync import LocalAudioScanner, LocalPlexampPipeline
 from audio_verifier import AudioFactChecker
 from cd_mixtape import CDMixtapePlanner, CDMixtapeExporter, LocalLibraryIndex, SpotifyRecommender, CAPACITY_PRESETS
+from core import AudioPreviewPlayer
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
 base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -2990,7 +2991,11 @@ class DownloaderApp(ctk.CTk):
     # =========================================================================
 
     def emergency_process_cleanup(self):
-        """ Guarantees all child processes (yt-dlp, ffmpeg) are terminated when exiting """
+        """ Guarantees all child processes (yt-dlp, ffmpeg, ffplay) are terminated when exiting """
+        try:
+            AudioPreviewPlayer.stop()
+        except Exception:
+            pass
         if self.active_process:
             try:
                 subprocess.run(
@@ -3254,6 +3259,10 @@ class DownloaderApp(ctk.CTk):
             self.update_ytdlp_btn.configure(state="normal", text="Update Engine")
 
     def select_tab(self, tab_name):
+        try:
+            AudioPreviewPlayer.stop()
+        except Exception:
+            pass
         self.active_tab = tab_name
         cfg = getattr(self, 'theme_cfg', {})
         
@@ -5206,6 +5215,16 @@ class DownloaderApp(ctk.CTk):
                 hover_color=cfg["option_hover"],
                 checkmark_color=cfg["input_bg"]
             )
+            if "btn_play" in item and item["btn_play"] and hasattr(item["btn_play"], "winfo_exists") and item["btn_play"].winfo_exists():
+                item["btn_play"].configure(
+                    fg_color=cfg["input_bg"],
+                    hover_color=cfg.get("btn_hover", "#334155")
+                )
+            if "btn_diff" in item and item["btn_diff"] and hasattr(item["btn_diff"], "winfo_exists") and item["btn_diff"].winfo_exists():
+                item["btn_diff"].configure(
+                    fg_color=cfg["input_bg"],
+                    hover_color=cfg.get("btn_hover", "#334155")
+                )
         
         self.status_box.configure(
             fg_color=cfg["input_bg"],
@@ -5901,6 +5920,43 @@ class DownloaderApp(ctk.CTk):
             )
             lbl_q.pack(side="right", padx=(4, 10))
 
+        # Side-by-Side Diff Modal Button
+        btn_diff = ctk.CTkButton(
+            row_frame,
+            text="⚖️ Diff",
+            width=54,
+            height=26,
+            font=("Segoe UI", 9, "bold"),
+            fg_color="#1E293B",
+            hover_color="#334155",
+            border_color="#94A3B8",
+            border_width=1,
+            text_color="#E2E8F0",
+            command=lambda idx=original_idx: self.show_verifier_track_diff(idx)
+        )
+        btn_diff.pack(side="right", padx=(2, 4))
+
+        # In-App 10s Audio Audition Button
+        btn_play = ctk.CTkButton(
+            row_frame,
+            text="▶ 10s Preview",
+            width=88,
+            height=26,
+            font=("Segoe UI", 9, "bold"),
+            fg_color="#1E293B",
+            hover_color="#334155",
+            border_color="#38BDF8",
+            border_width=1,
+            text_color="#38BDF8"
+        )
+        btn_play.configure(command=lambda idx=original_idx, b=btn_play: self.toggle_verifier_track_preview(idx, b))
+        btn_play.pack(side="right", padx=(2, 4))
+
+        # Allow double-clicking row or labels to open diff
+        row_frame.bind("<Double-Button-1>", lambda e, idx=original_idx: self.show_verifier_track_diff(idx))
+        detail_lbl.bind("<Double-Button-1>", lambda e, idx=original_idx: self.show_verifier_track_diff(idx))
+        fn_lbl.bind("<Double-Button-1>", lambda e, idx=original_idx: self.show_verifier_track_diff(idx))
+
         self.verifier_track_items.append({
             "original_index": original_idx,
             "result": res,
@@ -5912,8 +5968,227 @@ class DownloaderApp(ctk.CTk):
             "btn_redl": btn_redl,
             "btn_fix": btn_fix,
             "btn_keep": btn_keep,
-            "btn_sort": btn_sort
+            "btn_sort": btn_sort,
+            "btn_play": btn_play,
+            "btn_diff": btn_diff
         })
+
+    def toggle_verifier_track_preview(self, track_index: int, button_widget=None):
+        """ Toggles playback of a 10-second snippet of the track for instant auditory inspection """
+        if track_index >= len(self.verifier_scan_results):
+            return
+        res = self.verifier_scan_results[track_index]
+        file_path = res.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            self.log(f"Cannot preview track: File does not exist ({file_path})", is_error=True)
+            return
+
+        is_currently_playing_this = (
+            AudioPreviewPlayer.is_playing() and 
+            AudioPreviewPlayer.get_playing_file() == os.path.normpath(file_path)
+        )
+
+        if is_currently_playing_this:
+            AudioPreviewPlayer.stop()
+            if button_widget and button_widget.winfo_exists():
+                button_widget.configure(text="▶ 10s Preview", fg_color="#1E293B", text_color="#38BDF8")
+        else:
+            if hasattr(self, '_active_preview_button') and self._active_preview_button:
+                try:
+                    if self._active_preview_button.winfo_exists():
+                        self._active_preview_button.configure(text="▶ 10s Preview", fg_color="#1E293B", text_color="#38BDF8")
+                except Exception:
+                    pass
+            self._active_preview_button = button_widget
+
+            def on_playback_done():
+                def _update_ui():
+                    if button_widget and button_widget.winfo_exists():
+                        button_widget.configure(text="▶ 10s Preview", fg_color="#1E293B", text_color="#38BDF8")
+                    if getattr(self, '_active_preview_button', None) == button_widget:
+                        self._active_preview_button = None
+                self.after(0, _update_ui)
+
+            file_dur = res.get("current", {}).get("duration_s", 0) or 0
+            offset = max(8.0, min(file_dur * 0.25, file_dur - 12.0)) if file_dur > 20.0 else 10.0
+
+            started = AudioPreviewPlayer.play(
+                file_path,
+                offset_seconds=offset,
+                duration_seconds=10.0,
+                on_stop=on_playback_done
+            )
+            if started:
+                if button_widget and button_widget.winfo_exists():
+                    button_widget.configure(text="⏹ Stop", fg_color="#7F1D1D", text_color="#FCA5A5")
+                self.log(f"[Audio Audition] Playing 10s preview of '{res.get('filename')}' @ {int(offset)}s...")
+
+    def show_verifier_track_diff(self, track_index: int):
+        """ Displays an elevated side-by-side metadata and acoustic fingerprint comparison modal """
+        if track_index >= len(self.verifier_scan_results):
+            return
+        res = self.verifier_scan_results[track_index]
+        curr = res.get("current", {})
+        rec = res.get("recognized", {})
+        st = res.get("status", "")
+        file_path = res.get("file_path", "")
+        filename = res.get("filename", "")
+        reason = res.get("discrepancy_reason", "No reason specified.")
+        cfg = getattr(self, 'theme_cfg', {})
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(f"Acoustic Verification Diff: {filename}")
+        dialog.geometry("780x520")
+        dialog.minsize(700, 460)
+        try:
+            dialog.transient(self)
+            dialog.after(50, lambda: [dialog.grab_set() if dialog.winfo_exists() else None])
+        except Exception:
+            pass
+
+        try:
+            x = self.winfo_x() + (self.winfo_width() // 2) - 390
+            y = self.winfo_y() + (self.winfo_height() // 2) - 260
+            dialog.geometry(f"780x520+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        def _on_dialog_close():
+            AudioPreviewPlayer.stop()
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _on_dialog_close)
+
+        hdr = ctk.CTkFrame(dialog, fg_color=cfg.get("card_bg", "#0F172A"), corner_radius=10, border_color=cfg.get("border", "#1E293B"), border_width=1)
+        hdr.pack(fill="x", padx=20, pady=(20, 10))
+
+        hdr_top = ctk.CTkFrame(hdr, fg_color="transparent")
+        hdr_top.pack(fill="x", padx=15, pady=(10, 4))
+
+        fn_lbl = ctk.CTkLabel(hdr_top, text=f"🎵  {filename}", font=("Segoe UI", 13, "bold"), text_color=cfg.get("text_primary", "#F8FAFC"), anchor="w")
+        fn_lbl.pack(side="left")
+
+        badge_color = "#FB7185" if st in ("MISMATCH", "WRONG_TRACK") else ("#F59E0B" if st == "COVER_DETECTED" else ("#4ADE80" if st == "VERIFIED" else "#94A3B8"))
+        st_badge = ctk.CTkLabel(hdr_top, text=f"  {st}  ", font=("Segoe UI", 10, "bold"), text_color=badge_color, fg_color="#1E293B", corner_radius=6)
+        st_badge.pack(side="right")
+
+        rsn_lbl = ctk.CTkLabel(hdr, text=f"Diagnosis: {reason}", font=("Segoe UI", 10), text_color="#94A3B8", anchor="w", wraplength=700, justify="left")
+        rsn_lbl.pack(fill="x", padx=15, pady=(0, 10))
+
+        grid_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        grid_frame.pack(fill="both", expand=True, padx=20, pady=5)
+
+        left_card = ctk.CTkFrame(grid_frame, fg_color=cfg.get("card_bg", "#0F172A"), corner_radius=10, border_color=cfg.get("border", "#1E293B"), border_width=1)
+        left_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        lbl_l_title = ctk.CTkLabel(left_card, text="📁 CURRENT EMBEDDED TAGS", font=("Segoe UI", 11, "bold"), text_color="#38BDF8")
+        lbl_l_title.pack(anchor="w", padx=15, pady=(12, 8))
+
+        def add_field(parent, label, value, text_color=None):
+            f_frame = ctk.CTkFrame(parent, fg_color="transparent")
+            f_frame.pack(fill="x", padx=15, pady=3)
+            ctk.CTkLabel(f_frame, text=f"{label}:", width=70, font=("Segoe UI", 10, "bold"), text_color="#64748B", anchor="w").pack(side="left")
+            ctk.CTkLabel(f_frame, text=str(value or "None"), font=("Segoe UI", 10), text_color=text_color or "#E2E8F0", anchor="w", wraplength=230, justify="left").pack(side="left", fill="x", expand=True)
+
+        add_field(left_card, "Artist", curr.get("artist", "Unknown"))
+        add_field(left_card, "Title", curr.get("title", "Unknown"))
+        add_field(left_card, "Album", curr.get("album", "Unknown"))
+        dur_s = curr.get("duration_s", 0) or 0
+        dur_str = f"{int(dur_s // 60)}m {int(dur_s % 60):02d}s" if dur_s else "Unknown"
+        add_field(left_card, "Duration", dur_str)
+        add_field(left_card, "Year", curr.get("release_year") or curr.get("date") or "Unknown")
+        add_field(left_card, "Artwork", "✓ Embedded Artwork" if curr.get("has_cover") else "❌ Missing Artwork", "#4ADE80" if curr.get("has_cover") else "#FB7185")
+
+        right_card = ctk.CTkFrame(grid_frame, fg_color=cfg.get("card_bg", "#0F172A"), corner_radius=10, border_color=badge_color if st != "VERIFIED" else cfg.get("border", "#1E293B"), border_width=1)
+        right_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
+
+        lbl_r_title = ctk.CTkLabel(right_card, text="🔬 ACOUSTIC MATCH (SHAZAM)", font=("Segoe UI", 11, "bold"), text_color="#4ADE80" if st == "VERIFIED" else badge_color)
+        lbl_r_title.pack(anchor="w", padx=15, pady=(12, 8))
+
+        if rec.get("matched"):
+            add_field(right_card, "Artist", rec.get("artist", "Unknown"), "#4ADE80" if res.get("artist_similarity", 0) >= 0.70 else "#FB7185")
+            add_field(right_card, "Title", rec.get("title", "Unknown"), "#4ADE80" if res.get("title_similarity", 0) >= 0.65 else "#FB7185")
+            add_field(right_card, "Album", rec.get("album", "Unknown"))
+            r_dur_ms = rec.get("duration_ms", 0) or 0
+            r_dur_s = r_dur_ms / 1000.0
+            r_dur_str = f"{int(r_dur_s // 60)}m {int(r_dur_s % 60):02d}s" if r_dur_s else "Unknown"
+            add_field(right_card, "Duration", r_dur_str)
+            add_field(right_card, "Year", rec.get("year", "Unknown"))
+            add_field(right_card, "Confidence", f"Artist: {int(res.get('artist_similarity', 0)*100)}%  •  Title: {int(res.get('title_similarity', 0)*100)}%", "#38BDF8")
+        else:
+            add_field(right_card, "Status", "No acoustic fingerprint match found", "#94A3B8")
+            add_field(right_card, "Note", "Audio may be an unreleased mix, live session, or podcast not in Shazam catalog", "#64748B")
+
+        act_card = ctk.CTkFrame(dialog, fg_color=cfg.get("card_bg", "#0F172A"), corner_radius=10, border_color=cfg.get("border", "#1E293B"), border_width=1)
+        act_card.pack(fill="x", padx=20, pady=(10, 20))
+
+        act_inner = ctk.CTkFrame(act_card, fg_color="transparent")
+        act_inner.pack(fill="x", padx=15, pady=10)
+
+        btn_dlg_play = ctk.CTkButton(
+            act_inner,
+            text="▶ Audition 10s Audio",
+            font=("Segoe UI", 10, "bold"),
+            height=32,
+            fg_color="#1E293B",
+            hover_color="#334155",
+            border_color="#38BDF8",
+            border_width=1,
+            text_color="#38BDF8"
+        )
+        btn_dlg_play.configure(command=lambda: self.toggle_verifier_track_preview(track_index, btn_dlg_play))
+        btn_dlg_play.pack(side="left", padx=(0, 8))
+
+        btn_dlg_close = ctk.CTkButton(
+            act_inner,
+            text="✕ Close",
+            font=("Segoe UI", 10, "bold"),
+            height=32,
+            width=80,
+            fg_color="#1E293B",
+            hover_color="#334155",
+            command=_on_dialog_close
+        )
+        btn_dlg_close.pack(side="right")
+
+        if st in ("COVER_DETECTED", "WRONG_TRACK", "DURATION_MISMATCH", "MISMATCH", "METADATA_TYPO"):
+            if rec.get("matched"):
+                btn_dlg_fix = ctk.CTkButton(
+                    act_inner,
+                    text="🏷️ Accept & Retag",
+                    font=("Segoe UI", 10, "bold"),
+                    height=32,
+                    fg_color="#059669",
+                    hover_color="#10B981",
+                    command=lambda: [self.fix_single_verifier_track(track_index), _on_dialog_close()]
+                )
+                btn_dlg_fix.pack(side="right", padx=6)
+
+            btn_dlg_keep = ctk.CTkButton(
+                act_inner,
+                text="✅ Keep Current Tags",
+                font=("Segoe UI", 10, "bold"),
+                height=32,
+                fg_color="#1E293B",
+                hover_color="#334155",
+                border_color="#34D399",
+                border_width=1,
+                text_color="#34D399",
+                command=lambda: [self.mark_verifier_track_as_verified(track_index), _on_dialog_close()]
+            )
+            btn_dlg_keep.pack(side="right", padx=6)
+
+            if st in ("COVER_DETECTED", "WRONG_TRACK", "DURATION_MISMATCH"):
+                btn_dlg_redl = ctk.CTkButton(
+                    act_inner,
+                    text="🔄 Re-Download",
+                    font=("Segoe UI", 10, "bold"),
+                    height=32,
+                    fg_color="#028090",
+                    hover_color="#00A896",
+                    command=lambda: [self.redownload_single_verifier_track(track_index), _on_dialog_close()]
+                )
+                btn_dlg_redl.pack(side="right", padx=6)
 
     def mark_verifier_track_as_verified(self, track_index: int):
         """ Marks a mismatched track as VERIFIED (false positive / keep current tags) """
@@ -6905,6 +7180,18 @@ class DownloaderApp(ctk.CTk):
             except Exception:
                 pass
         self.after(0, self.quit_application)
+
+    def destroy(self):
+        try:
+            AudioPreviewPlayer.stop()
+        except Exception:
+            pass
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        super().destroy()
 
     def quit_application(self):
         """Cleanly halts all background tasks, saves previous selections, and terminates."""

@@ -24,6 +24,7 @@ from core.audio import (
     slice_audio_segment,
     get_track_bitrate_kbps,
     should_transcode_track,
+    AudioPreviewPlayer,
 )
 from core.lyrics import (
     LyricsFetcher,
@@ -54,6 +55,7 @@ __all__ = [
     "slice_audio_segment",
     "get_track_bitrate_kbps",
     "should_transcode_track",
+    "AudioPreviewPlayer",
     "LyricsFetcher",
     "PlexampTagger",
     "write_car_optimized_tags",

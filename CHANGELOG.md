@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- refactor(ui): decompose monolithic app.py into ui.tabs mixins and TrackTable component (8446a33)
+
 ### Added
 - add universal smart input dispatcher and dark-elevation CToolTip system (23f503c)
 

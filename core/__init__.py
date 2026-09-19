@@ -18,6 +18,7 @@ from core.utils import (
     string_similarity,
     clean_display_title,
     clean_display_artist,
+    CToolTip,
 )
 from core.audio import (
     ReplayGainCalculator,
@@ -60,4 +61,5 @@ __all__ = [
     "PlexampTagger",
     "write_car_optimized_tags",
     "VerifierDatabase",
+    "CToolTip",
 ]

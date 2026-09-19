@@ -9,6 +9,7 @@ import re
 import shutil
 import time
 import subprocess
+import tkinter as tk
 from typing import Set
 
 # Windows Process Scheduling Flags (run subprocesses in background without popping windows or hogging CPU)
@@ -218,3 +219,132 @@ def clean_display_artist(raw_artist: str) -> str:
     a = re.sub(r'[\(\[\{]\s*[\)\]\}]', '', a)
     a = re.sub(r'\s+', ' ', a).strip(' -_.,;:')
     return a or raw_artist.strip()
+
+
+class CToolTip:
+    """
+    Lightweight, dark-elevation hover tooltip for CustomTkinter and Tkinter widgets.
+    Features:
+    - Configurable hover delay (default 350ms)
+    - Dark theme styling (#0F172A slate-900 background, #38BDF8 border)
+    - Multi-target event interception supporting compound CustomTkinter components
+    - Smart screen-edge clamping preventing clipping past display bounds
+    - Automatic dismiss on cursor leave, mouse click, unmap, or window destruction
+    """
+    def __init__(self, widget, text: str, delay_ms: int = 350, max_width: int = 300):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self.max_width = max_width
+        self.tip_window = None
+        self._enter_id = None
+        self._leave_id = None
+
+        self.targets = self._get_interactive_targets(widget)
+        for t in self.targets:
+            try:
+                t.bind("<Enter>", self._on_enter, add="+")
+                t.bind("<Leave>", self._on_leave, add="+")
+                t.bind("<ButtonPress>", self._on_press, add="+")
+                t.bind("<Destroy>", self._on_destroy, add="+")
+            except Exception:
+                pass
+
+    def _get_interactive_targets(self, widget):
+        targets = [widget]
+        for attr in ("_canvas", "_text_label", "_label", "_entry"):
+            sub = getattr(widget, attr, None)
+            if sub and sub not in targets:
+                targets.append(sub)
+        return targets
+
+    def _on_enter(self, event=None):
+        if self._leave_id:
+            try:
+                self.widget.after_cancel(self._leave_id)
+            except Exception:
+                pass
+            self._leave_id = None
+        if not self.tip_window and not self._enter_id:
+            self._enter_id = self.widget.after(self.delay_ms, self.show_tip)
+
+    def _on_leave(self, event=None):
+        if self._enter_id:
+            try:
+                self.widget.after_cancel(self._enter_id)
+            except Exception:
+                pass
+            self._enter_id = None
+        if self.tip_window and not self._leave_id:
+            self._leave_id = self.widget.after(100, self.hide_tip)
+
+    def _on_press(self, event=None):
+        self.hide_tip()
+
+    def _on_destroy(self, event=None):
+        self.hide_tip()
+
+    def show_tip(self):
+        self._enter_id = None
+        if self.tip_window or not self.text:
+            return
+        try:
+            if not self.widget.winfo_exists():
+                return
+        except Exception:
+            return
+
+        try:
+            x = self.widget.winfo_rootx() + 15
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            screen_width = self.widget.winfo_screenwidth()
+            screen_height = self.widget.winfo_screenheight()
+        except Exception:
+            return
+
+        try:
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            try:
+                tw.attributes("-topmost", True)
+            except Exception:
+                pass
+
+            lbl = tk.Label(
+                tw,
+                text=self.text,
+                bg="#0F172A",
+                fg="#F1F5F9",
+                font=("Segoe UI", 9),
+                padx=10,
+                pady=6,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground="#38BDF8",
+                justify="left",
+                wraplength=self.max_width
+            )
+            lbl.pack()
+            tw.update_idletasks()
+
+            tip_w = tw.winfo_reqwidth()
+            tip_h = tw.winfo_reqheight()
+
+            if x + tip_w > screen_width - 15:
+                x = max(10, screen_width - tip_w - 15)
+            if y + tip_h > screen_height - 25:
+                y = max(10, self.widget.winfo_rooty() - tip_h - 6)
+
+            tw.wm_geometry(f"+{x}+{y}")
+        except Exception:
+            self.hide_tip()
+
+    def hide_tip(self):
+        self._leave_id = None
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+

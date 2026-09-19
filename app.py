@@ -29,7 +29,7 @@ from youtube_sync import YouTubeFetcher, YouTubePlexampPipeline
 from local_sync import LocalAudioScanner, LocalPlexampPipeline
 from audio_verifier import AudioFactChecker
 from cd_mixtape import CDMixtapePlanner, CDMixtapeExporter, LocalLibraryIndex, SpotifyRecommender, CAPACITY_PRESETS
-from core import AudioPreviewPlayer
+from core import AudioPreviewPlayer, CToolTip
 
 # --- Setup System PATH for Bundled JS Runtimes (e.g., deno.exe, ffmpeg.exe) ---
 base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -291,7 +291,9 @@ class DownloaderApp(ctk.CTk):
             placeholder_text_color="#78909C"
         )
         self.url_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.url_input.bind("<Return>", lambda e: self._on_url_input_return())
         self.theme_entries.append(self.url_input)
+        CToolTip(self.url_input, "Paste any YouTube, SoundCloud, or supported web video URL. Also automatically detects Spotify playlists or local folders and routes them!")
 
         self.paste_btn = ctk.CTkButton(
             self.url_frame,
@@ -303,6 +305,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.paste_btn.pack(side="right")
         self.theme_buttons_secondary.append(self.paste_btn)
+        CToolTip(self.paste_btn, "Paste URL from clipboard (Intelligently detects and routes Spotify playlists or local folders)")
         
         # Destination Folder with Browse Button
         lbl_dst = ctk.CTkLabel(self.input_card, text="DESTINATION FOLDER", font=("Segoe UI", 10, "bold"), text_color="#78909C")
@@ -327,6 +330,7 @@ class DownloaderApp(ctk.CTk):
         self.folder_input.bind("<FocusOut>", lambda e: self.save_setting("destination_folder", self.folder_input.get().strip()))
         self.folder_input.bind("<KeyRelease>", lambda e: self.save_setting("destination_folder", self.folder_input.get().strip()))
         self.theme_entries.append(self.folder_input)
+        CToolTip(self.folder_input, "Default download destination directory for media files.")
 
         self.browse_btn = ctk.CTkButton(
             self.folder_frame,
@@ -338,6 +342,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.browse_btn.pack(side="right")
         self.theme_buttons_secondary.append(self.browse_btn)
+        CToolTip(self.browse_btn, "Browse computer or external drive for download destination.")
 
         # Options Card (Switches / Avatar)
         self.options_card = ctk.CTkFrame(self.download_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
@@ -421,6 +426,7 @@ class DownloaderApp(ctk.CTk):
         self.season_input.pack(side="left", anchor="center")
         self.season_checkbox.deselect()
         self.theme_entries.append(self.season_input)
+        CToolTip(self.season_input, "TV season prefix (e.g. S01) applied to episode numbering for automated Plex/Jellyfin naming.")
 
         # Col 1: Items Range
         self.range_frame = ctk.CTkFrame(self.action_frame, fg_color="transparent")
@@ -446,6 +452,7 @@ class DownloaderApp(ctk.CTk):
         self.range_input.pack(side="left", anchor="center")
         self.range_checkbox.deselect()
         self.theme_entries.append(self.range_input)
+        CToolTip(self.range_input, "Playlist item range filter (e.g. 1:50) to download a specific slice instead of an entire series.")
 
         # Col 2: Start Button / Progress / Cancel Container
         self.btn_container = ctk.CTkFrame(self.action_frame, width=170, height=42, fg_color="transparent")
@@ -518,6 +525,7 @@ class DownloaderApp(ctk.CTk):
         self.speed_input.insert(0, "33")
         self.speed_input.pack(side="left", anchor="center")
         self.theme_entries.append(self.speed_input)
+        CToolTip(self.speed_input, "Audio/video download bandwidth throttle in MB/s to prevent saturation.")
         
         # Grid configs
         self.action_frame.columnconfigure(0, weight=1)
@@ -633,8 +641,9 @@ class DownloaderApp(ctk.CTk):
             placeholder_text_color="#78909C"
         )
         self.spotify_url_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.spotify_url_input.bind("<Return>", lambda e: self.fetch_spotify_playlist())
+        self.spotify_url_input.bind("<Return>", lambda e: self._on_spotify_input_return())
         self.theme_entries.append(self.spotify_url_input)
+        CToolTip(self.spotify_url_input, "Paste any Spotify track, album, or playlist URL. Auto-syncs and organizes into your Plexamp library.")
 
         self.btn_spotify_paste = ctk.CTkButton(
             self.spotify_url_frame,
@@ -646,6 +655,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.btn_spotify_paste.pack(side="left", padx=(0, 6))
         self.theme_buttons_secondary.append(self.btn_spotify_paste)
+        CToolTip(self.btn_spotify_paste, "Paste Spotify URL from clipboard (Auto-routes YouTube links to YouTube-to-Plexamp)")
 
         self.btn_spotify_fetch = ctk.CTkButton(
             self.spotify_url_frame,
@@ -715,10 +725,12 @@ class DownloaderApp(ctk.CTk):
         self.spotify_folder_input.bind("<FocusOut>", lambda e: self.save_setting("plex_music_folder", self.spotify_folder_input.get().strip()))
         self.spotify_folder_input.bind("<KeyRelease>", lambda e: self.save_setting("plex_music_folder", self.spotify_folder_input.get().strip()))
         self.theme_entries.append(self.spotify_folder_input)
+        CToolTip(self.spotify_folder_input, "Root directory of your Plexamp/Plex music library (e.g. C:\\SMA-downloads\\Music).")
 
         self.btn_spotify_browse = ctk.CTkButton(fld_row, text="📂", width=32, height=28, font=("Segoe UI", 10, "bold"), command=self.browse_plex_folder)
         self.btn_spotify_browse.pack(side="right")
         self.theme_buttons_secondary.append(self.btn_spotify_browse)
+        CToolTip(self.btn_spotify_browse, "Browse and select Plexamp music library folder")
 
         # Row 1: Format + Org + Concurrency
         opts_row1 = ctk.CTkFrame(cfg_frame, fg_color="transparent")
@@ -970,8 +982,9 @@ class DownloaderApp(ctk.CTk):
             placeholder_text_color="#78909C"
         )
         self.yt_plexamp_url_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.yt_plexamp_url_input.bind("<Return>", lambda e: self.fetch_yt_plexamp_playlist())
+        self.yt_plexamp_url_input.bind("<Return>", lambda e: self._on_yt_plexamp_input_return())
         self.theme_entries.append(self.yt_plexamp_url_input)
+        CToolTip(self.yt_plexamp_url_input, "Paste any YouTube playlist, album, or video URL to fetch, convert, tag, and organize into Plexamp.")
 
         self.btn_yt_plexamp_paste = ctk.CTkButton(
             self.yt_plexamp_url_frame,
@@ -983,6 +996,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.btn_yt_plexamp_paste.pack(side="left", padx=(0, 6))
         self.theme_buttons_secondary.append(self.btn_yt_plexamp_paste)
+        CToolTip(self.btn_yt_plexamp_paste, "Paste YouTube URL from clipboard (Auto-routes Spotify links to Spotify-to-Plexamp)")
 
         self.btn_yt_plexamp_fetch = ctk.CTkButton(
             self.yt_plexamp_url_frame,
@@ -1052,10 +1066,12 @@ class DownloaderApp(ctk.CTk):
         self.yt_plexamp_folder_input.bind("<FocusOut>", lambda e: self.save_setting("plex_music_folder", self.yt_plexamp_folder_input.get().strip()))
         self.yt_plexamp_folder_input.bind("<KeyRelease>", lambda e: self.save_setting("plex_music_folder", self.yt_plexamp_folder_input.get().strip()))
         self.theme_entries.append(self.yt_plexamp_folder_input)
+        CToolTip(self.yt_plexamp_folder_input, "Root directory of your Plexamp/Plex music library.")
 
         self.btn_yt_plexamp_browse = ctk.CTkButton(yt_fld_row, text="📂", width=32, height=28, font=("Segoe UI", 10, "bold"), command=self.browse_yt_plex_folder)
         self.btn_yt_plexamp_browse.pack(side="right")
         self.theme_buttons_secondary.append(self.btn_yt_plexamp_browse)
+        CToolTip(self.btn_yt_plexamp_browse, "Browse and select Plexamp music library folder")
 
         # Row 1: Format + Org + Concurrency
         yt_opts_row1 = ctk.CTkFrame(yt_cfg_frame, fg_color="transparent")
@@ -1679,6 +1695,7 @@ class DownloaderApp(ctk.CTk):
         lbl_vsrc = ctk.CTkLabel(self.verifier_source_card, text="MUSIC FOLDER TO SCAN", font=("Segoe UI", 10, "bold"), text_color="#78909C")
         lbl_vsrc.pack(anchor="w", padx=15, pady=(2, 0))
         self.theme_labels_secondary.append(lbl_vsrc)
+        CToolTip(lbl_vsrc, "Fact-checker uses Shazam acoustic neural fingerprinting to scan actual waveforms and identify mislabeled tracks, missing cover art, and metadata discrepancies.")
 
         v_input_frame = ctk.CTkFrame(self.verifier_source_card, fg_color="transparent")
         v_input_frame.pack(fill="x", padx=15, pady=(2, 4))
@@ -1695,7 +1712,21 @@ class DownloaderApp(ctk.CTk):
         if saved_vdir:
             self.verifier_folder_input.insert(0, saved_vdir)
         self.verifier_folder_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.verifier_folder_input.bind("<Return>", lambda e: self._on_verifier_folder_return())
         self.theme_entries.append(self.verifier_folder_input)
+        CToolTip(self.verifier_folder_input, "Target music library folder or album path to scan and acoustically fact-check with Shazam.")
+
+        self.btn_verifier_paste = ctk.CTkButton(
+            v_input_frame,
+            text="📋 Paste",
+            width=70,
+            height=32,
+            font=("Segoe UI", 10, "bold"),
+            command=self.paste_verifier_folder
+        )
+        self.btn_verifier_paste.pack(side="right", padx=(6, 0))
+        self.theme_buttons_secondary.append(self.btn_verifier_paste)
+        CToolTip(self.btn_verifier_paste, "Paste music folder path from clipboard (Auto-routes pasted URLs)")
 
         self.btn_verifier_browse = ctk.CTkButton(
             v_input_frame,
@@ -1707,6 +1738,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.btn_verifier_browse.pack(side="right")
         self.theme_buttons_secondary.append(self.btn_verifier_browse)
+        CToolTip(self.btn_verifier_browse, "Browse and select music library folder to scan")
 
         # Options & Scan Action Row
         v_opts_row = ctk.CTkFrame(self.verifier_source_card, fg_color="transparent")
@@ -1722,6 +1754,7 @@ class DownloaderApp(ctk.CTk):
         self.verifier_reorg_switch.select()
         self.verifier_reorg_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_reorg_switch)
+        CToolTip(self.verifier_reorg_switch, "Automatically organizes audio files into standard 'Artist/Album/Track - Title' folder hierarchy upon verification.")
 
         self.verifier_art_switch = ctk.CTkSwitch(
             v_opts_row,
@@ -1733,6 +1766,7 @@ class DownloaderApp(ctk.CTk):
         self.verifier_art_switch.select()
         self.verifier_art_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_art_switch)
+        CToolTip(self.verifier_art_switch, "Automatically downloads and embeds high-resolution cover art and synchronized lyrics for verified tracks.")
 
         self.verifier_autofix_switch = ctk.CTkSwitch(
             v_opts_row,
@@ -1749,6 +1783,7 @@ class DownloaderApp(ctk.CTk):
             self.verifier_autofix_switch.deselect()
         self.verifier_autofix_switch.pack(side="left", padx=(0, 10))
         self.theme_switches.append(self.verifier_autofix_switch)
+        CToolTip(self.verifier_autofix_switch, "When enabled, automatically retags and applies official album art/lyrics for tracks confirmed by acoustic fingerprinting.")
 
         self.verifier_cache_switch = ctk.CTkSwitch(
             v_opts_row,
@@ -2160,7 +2195,9 @@ class DownloaderApp(ctk.CTk):
         saved_cd_lib = self.saved_settings.get("plex_music_folder", "") or self.saved_settings.get("destination_folder", "") or r"C:\SMA-downloads\Music"
         self.cd_library_folder_input.insert(0, saved_cd_lib)
         self.cd_library_folder_input.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.cd_library_folder_input.bind("<Return>", lambda e: self._on_cd_library_return())
         self.theme_entries.append(self.cd_library_folder_input)
+        CToolTip(self.cd_library_folder_input, "Source music folder containing MP3/FLAC tracks to draw from for mixtape creation.")
 
         self.btn_cd_browse_lib = ctk.CTkButton(
             cd_src_frame,
@@ -2301,6 +2338,8 @@ class DownloaderApp(ctk.CTk):
         )
         self.cd_preset_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_preset_menu)
+        CToolTip(self.cd_preset_menu, "Target media preset. Uses knapsack optimization to fill standard 700MB Data CDs or 80-minute Red Book Audio CDs to maximum capacity.")
+        CToolTip(lbl_cap, "Target media preset. Uses knapsack optimization to fill standard 700MB Data CDs or 80-minute Red Book Audio CDs to maximum capacity.")
 
         # Row 0, Col 1: Seed Track Count
         f_seed_cnt = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -2345,6 +2384,8 @@ class DownloaderApp(ctk.CTk):
         )
         self.cd_max_vibe_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_max_vibe_menu)
+        CToolTip(self.cd_max_vibe_menu, "Limits maximum tracks selected per related recommendation artist to guarantee diverse, non-repetitive mixtapes.")
+        CToolTip(lbl_vmax, "Limits maximum tracks selected per related recommendation artist to guarantee diverse, non-repetitive mixtapes.")
 
         # Row 0, Col 3: Max Track Duration (Anti-Bloat Filter)
         f_dur_max = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -2366,6 +2407,8 @@ class DownloaderApp(ctk.CTk):
         )
         self.cd_max_dur_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_max_dur_menu)
+        CToolTip(self.cd_max_dur_menu, "Filters out lengthy mixes, podcasts, or live jams longer than this threshold to preserve disc capacity.")
+        CToolTip(lbl_dmax, "Filters out lengthy mixes, podcasts, or live jams longer than this threshold to preserve disc capacity.")
 
         # Row 1, Col 0: Compression / Squeeze Mode
         f_squeeze = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -2385,6 +2428,8 @@ class DownloaderApp(ctk.CTk):
         )
         self.cd_squeeze_mode_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_squeeze_mode_menu)
+        CToolTip(self.cd_squeeze_mode_menu, "Lossless Squeeze intelligently encodes FLAC/lossless files to high-efficiency MP3 while leaving standard MP3s untouched, optimizing disc space without unnecessary re-encoding.")
+        CToolTip(lbl_sqz, "Lossless Squeeze intelligently encodes FLAC/lossless files to high-efficiency MP3 while leaving standard MP3s untouched, optimizing disc space without unnecessary re-encoding.")
 
         # Row 1, Col 1: Target MP3 Bitrate
         f_trans = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -2406,6 +2451,8 @@ class DownloaderApp(ctk.CTk):
         )
         self.cd_bitrate_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cd_bitrate_menu)
+        CToolTip(self.cd_bitrate_menu, "Target MP3 Bitrate: 256 kbps is the sweet spot for car stereos; 192 kbps allows fitting up to 140 songs on a 700MB CD with high perceptual quality.")
+        CToolTip(lbl_trans, "Target MP3 Bitrate: 256 kbps is the sweet spot for car stereos; 192 kbps allows fitting up to 140 songs on a 700MB CD with high perceptual quality.")
 
         # Row 1, Col 2: Audio Normalization
         f_norm = ctk.CTkFrame(cd_grid, fg_color="transparent")
@@ -2424,6 +2471,8 @@ class DownloaderApp(ctk.CTk):
             font=("Segoe UI", 10),
             command=lambda v: self.save_setting("cd_audio_normalization", v)
         )
+        CToolTip(self.cd_normalization_menu, "EBU R128 loudness leveling analyzes full acoustic dynamic range and balances volume across varied sources to avoid sudden volume jumps.")
+        CToolTip(lbl_norm, "EBU R128 loudness leveling analyzes full acoustic dynamic range and balances volume across varied sources to avoid sudden volume jumps.")
         saved_norm = self.saved_settings.get("cd_audio_normalization", "EBU R128 (-14 LUFS - Balanced)")
         if saved_norm in self.cd_normalization_menu._values:
             self.cd_normalization_menu.set(saved_norm)
@@ -2764,6 +2813,8 @@ class DownloaderApp(ctk.CTk):
             self.cookie_source_menu.set("cookies.txt (File)")
         self.cookie_source_menu.pack(fill="x", pady=(1, 0))
         self.theme_option_menus.append(self.cookie_source_menu)
+        CToolTip(self.cookie_source_menu, "Direct cookie extraction from your browser or cookies.txt file to unlock age-restricted, premium, and members-only streams without bot checks.")
+        CToolTip(lbl_csrc, "Direct cookie extraction from your browser or cookies.txt file to unlock age-restricted, premium, and members-only streams without bot checks.")
 
         # Row 1, Col 2: Notifications Switch
         notif_frame = ctk.CTkFrame(self.quality_grid, fg_color="transparent")
@@ -2892,6 +2943,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.update_cookies_btn.grid(row=0, column=0, padx=4, sticky="ew")
         self.theme_buttons_secondary.append(self.update_cookies_btn)
+        CToolTip(self.update_cookies_btn, "Upload a custom Netscape-formatted cookies.txt file to permanently authenticate yt-dlp downloads.")
 
         self.update_ytdlp_btn = ctk.CTkButton(
             self.tools_frame,
@@ -2903,6 +2955,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.update_ytdlp_btn.grid(row=0, column=1, padx=4, sticky="ew")
         self.theme_buttons_secondary.append(self.update_ytdlp_btn)
+        CToolTip(self.update_ytdlp_btn, "Checks for and downloads the latest yt-dlp binary release.")
 
         self.open_error_log_btn = ctk.CTkButton(
             self.tools_frame,
@@ -2914,6 +2967,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.open_error_log_btn.grid(row=0, column=2, padx=4, sticky="ew")
         self.theme_buttons_secondary.append(self.open_error_log_btn)
+        CToolTip(self.open_error_log_btn, "Opens the persistent downloader error log file in your system text editor.")
 
         # =========================================================================
         # --- Page 4: Console Logs Page ---
@@ -3009,11 +3063,157 @@ class DownloaderApp(ctk.CTk):
                 except Exception:
                     pass
 
+    def dispatch_smart_input(self, raw_input: str, source_tab: str = None) -> bool:
+        """
+        Intelligently inspects an input string (URL, playlist, or folder path).
+        If the content belongs to a different workflow or engine than the current tab,
+        it smoothly transitions to the appropriate tab, pre-fills the input, triggers
+        the corresponding action, and logs a clear status notification.
+
+        Returns:
+            bool: True if redirected to another tab, False if caller should proceed locally.
+        """
+        if not raw_input or not isinstance(raw_input, str):
+            return False
+
+        text = raw_input.strip().strip('"\'')
+        if not text:
+            return False
+
+        # 1. Spotify Link Detection
+        is_spotify = bool(
+            "spotify.com/" in text.lower() or 
+            text.lower().startswith("spotify:")
+        )
+        if is_spotify and source_tab != "spotify":
+            self.select_tab("spotify")
+            self.spotify_url_input.delete(0, "end")
+            self.spotify_url_input.insert(0, text)
+            self.log("🔀 [Smart Dispatch] Detected Spotify URL. Redirected to Spotify-to-Plexamp tab.")
+            self.send_notification("Smart Input Routed", "Switched to Spotify-to-Plexamp tab & fetched playlist.")
+            self.fetch_spotify_playlist()
+            return True
+
+        # 2. YouTube Link Detection
+        is_yt = bool(
+            "youtube.com" in text.lower() or 
+            "youtu.be" in text.lower()
+        )
+        if is_yt:
+            if source_tab == "spotify":
+                self.select_tab("yt_plexamp")
+                self.yt_plexamp_url_input.delete(0, "end")
+                self.yt_plexamp_url_input.insert(0, text)
+                self.log("🔀 [Smart Dispatch] Detected YouTube link in Spotify tab. Switched to YouTube-to-Plexamp tab.")
+                self.send_notification("Smart Input Routed", "Switched to YouTube-to-Plexamp tab & fetched playlist.")
+                self.fetch_yt_plexamp_playlist()
+                return True
+            elif source_tab in ("verifier", "cd_mixtape", "local_plexamp"):
+                is_playlist = "list=" in text or "playlist" in text.lower()
+                target_tab = "yt_plexamp" if is_playlist else "download"
+                self.select_tab(target_tab)
+                if target_tab == "yt_plexamp":
+                    self.yt_plexamp_url_input.delete(0, "end")
+                    self.yt_plexamp_url_input.insert(0, text)
+                    self.fetch_yt_plexamp_playlist()
+                else:
+                    self.url_input.delete(0, "end")
+                    self.url_input.insert(0, text)
+                    threading.Thread(target=self.fetch_and_display_avatar, args=(text,), daemon=True).start()
+                self.log(f"🔀 [Smart Dispatch] Routed YouTube link to '{target_tab}' tab.")
+                return True
+
+        # 3. Local Directory Detection
+        is_dir = False
+        try:
+            if os.path.isdir(text):
+                is_dir = True
+            elif re.match(r'^[a-zA-Z]:[\\/]', text) or text.startswith('\\\\'):
+                is_dir = os.path.exists(text)
+        except Exception:
+            is_dir = False
+
+        if is_dir:
+            if source_tab in ("download", "search"):
+                self.select_tab("verifier")
+                self.verifier_folder_input.delete(0, "end")
+                self.verifier_folder_input.insert(0, text)
+                self.log(f"🔀 [Smart Dispatch] Detected local audio directory '{text}'. Routed to Fact-Check Audio tab.")
+                self.send_notification("Smart Input Routed", "Switched to Fact-Check Audio tab.")
+                return True
+            elif source_tab in ("spotify", "yt_plexamp"):
+                if hasattr(self, 'spotify_folder_input'):
+                    self.spotify_folder_input.delete(0, "end")
+                    self.spotify_folder_input.insert(0, text)
+                if hasattr(self, 'yt_plexamp_folder_input'):
+                    self.yt_plexamp_folder_input.delete(0, "end")
+                    self.yt_plexamp_folder_input.insert(0, text)
+                self.save_setting("plex_music_folder", text)
+                self.log(f"🔀 [Smart Dispatch] Updated Plexamp music library folder to '{text}'.")
+                self.send_notification("Library Updated", f"Destination folder set to: {text}")
+                return True
+
+        return False
+
+    def _on_url_input_return(self, event=None):
+        text = self.url_input.get().strip()
+        if not text:
+            return
+        if self.dispatch_smart_input(text, source_tab="download"):
+            return
+        threading.Thread(target=self.fetch_and_display_avatar, args=(text,), daemon=True).start()
+
+    def _on_spotify_input_return(self, event=None):
+        text = self.spotify_url_input.get().strip()
+        if not text:
+            return
+        if self.dispatch_smart_input(text, source_tab="spotify"):
+            return
+        self.fetch_spotify_playlist()
+
+    def _on_yt_plexamp_input_return(self, event=None):
+        text = self.yt_plexamp_url_input.get().strip()
+        if not text:
+            return
+        if self.dispatch_smart_input(text, source_tab="yt_plexamp"):
+            return
+        self.fetch_yt_plexamp_playlist()
+
+    def _on_verifier_folder_return(self, event=None):
+        text = self.verifier_folder_input.get().strip()
+        if not text:
+            return
+        if self.dispatch_smart_input(text, source_tab="verifier"):
+            return
+        self.start_verifier_scan()
+
+    def _on_cd_library_return(self, event=None):
+        text = self.cd_library_folder_input.get().strip()
+        if not text:
+            return
+        if self.dispatch_smart_input(text, source_tab="cd_mixtape"):
+            return
+        self.scan_cd_library()
+
+    def paste_verifier_folder(self):
+        """ Pastes clipboard contents into Verifier folder input and checks smart dispatch """
+        try:
+            clipboard_text = self.clipboard_get().strip().strip('"\'')
+            if clipboard_text:
+                if self.dispatch_smart_input(clipboard_text, source_tab="verifier"):
+                    return
+                self.verifier_folder_input.delete(0, "end")
+                self.verifier_folder_input.insert(0, clipboard_text)
+        except Exception as e:
+            self.log(f"Verifier clipboard paste error: {e}", is_error=True)
+
     def paste_url(self):
         """ Pastes clipboard contents into the URL input and loads avatar """
         try:
             clipboard_text = self.clipboard_get().strip()
             if clipboard_text:
+                if self.dispatch_smart_input(clipboard_text, source_tab="download"):
+                    return
                 self.url_input.delete(0, "end")
                 self.url_input.insert(0, clipboard_text)
                 threading.Thread(target=self.fetch_and_display_avatar, args=(clipboard_text,), daemon=True).start()
@@ -3877,6 +4077,8 @@ class DownloaderApp(ctk.CTk):
         try:
             clipboard_text = self.clipboard_get().strip()
             if clipboard_text:
+                if self.dispatch_smart_input(clipboard_text, source_tab="spotify"):
+                    return
                 self.spotify_url_input.delete(0, "end")
                 self.spotify_url_input.insert(0, clipboard_text)
                 self.fetch_spotify_playlist()
@@ -4248,6 +4450,8 @@ class DownloaderApp(ctk.CTk):
         try:
             clipboard_text = self.clipboard_get().strip()
             if clipboard_text:
+                if self.dispatch_smart_input(clipboard_text, source_tab="yt_plexamp"):
+                    return
                 self.yt_plexamp_url_input.delete(0, "end")
                 self.yt_plexamp_url_input.insert(0, clipboard_text)
                 self.fetch_yt_plexamp_playlist()

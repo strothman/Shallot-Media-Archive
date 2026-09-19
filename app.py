@@ -107,12 +107,14 @@ class DownloaderApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close_window)
         self.init_system_tray()
 
-        width, height = 960, 640
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
+        width, height = 1120, 720
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        x = max(0, (screen_w // 2) - (width // 2))
+        y = max(0, (screen_h // 2) - (height // 2))
         self.geometry(f"{width}x{height}+{x}+{y}")
         self.configure(fg_color="#070F15")
-        self.minsize(900, 600)
+        self.minsize(980, 650)
 
         # --- Load Saved Preferences ---
         self.saved_settings = self.load_saved_settings()
@@ -127,7 +129,7 @@ class DownloaderApp(ctk.CTk):
         self.page_titles = []
 
         # --- Left Sidebar ---
-        self.sidebar_frame = ctk.CTkFrame(self, corner_radius=0, width=210)
+        self.sidebar_frame = ctk.CTkFrame(self, corner_radius=0, width=225)
         self.sidebar_frame.pack(side="left", fill="y")
         self.sidebar_frame.pack_propagate(False)
 
@@ -1818,105 +1820,159 @@ class DownloaderApp(ctk.CTk):
         self.verifier_stats_card = ctk.CTkFrame(self.verifier_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
         self.verifier_stats_card.pack(fill="x", padx=20, pady=4)
 
-        v_stats_inner = ctk.CTkFrame(self.verifier_stats_card, fg_color="transparent")
-        v_stats_inner.pack(fill="x", padx=15, pady=6)
+        # Hero Metrics Row
+        self.v_hero_grid = ctk.CTkFrame(self.verifier_stats_card, fg_color="transparent")
+        self.v_hero_grid.pack(fill="x", padx=12, pady=(10, 8))
 
-        self.verifier_lbl_total = ctk.CTkLabel(v_stats_inner, text="0 Scanned", font=("Segoe UI", 10, "bold"), text_color="#78909C", cursor="hand2")
-        self.verifier_lbl_total.pack(side="left", padx=(0, 10))
-        self.verifier_lbl_total.bind("<Button-1>", lambda e: self.set_verifier_filter("all"))
+        self.theme_metric_cards = []
 
-        self.verifier_lbl_covers = ctk.CTkLabel(v_stats_inner, text="0 🎭 Covers", font=("Segoe UI", 10, "bold"), text_color="#F59E0B", cursor="hand2")
-        self.verifier_lbl_covers.pack(side="left", padx=(0, 10))
-        self.verifier_lbl_covers.bind("<Button-1>", lambda e: self.set_verifier_filter("covers"))
+        def create_metric_tile(parent, number_text, label_text, num_color, filter_mode):
+            card = ctk.CTkFrame(
+                parent,
+                fg_color="#131C2E",
+                corner_radius=8,
+                border_color="#1F3A4E",
+                border_width=1,
+                cursor="hand2"
+            )
+            card.pack(side="left", fill="both", expand=True, padx=4)
+            self.theme_metric_cards.append(card)
 
-        self.verifier_lbl_mismatch = ctk.CTkLabel(v_stats_inner, text="0 ⚠️ Mismatches", font=("Segoe UI", 10, "bold"), text_color="#FB7185", cursor="hand2")
-        self.verifier_lbl_mismatch.pack(side="left", padx=(0, 10))
-        self.verifier_lbl_mismatch.bind("<Button-1>", lambda e: self.set_verifier_filter("mismatch"))
+            num_lbl = ctk.CTkLabel(
+                card,
+                text=number_text,
+                font=("Segoe UI", 16, "bold"),
+                text_color=num_color
+            )
+            num_lbl.pack(pady=(6, 0))
 
-        self.verifier_lbl_verified = ctk.CTkLabel(v_stats_inner, text="0 ✅ Verified", font=("Segoe UI", 10, "bold"), text_color="#4ADE80", cursor="hand2")
-        self.verifier_lbl_verified.pack(side="left", padx=(0, 10))
-        self.verifier_lbl_verified.bind("<Button-1>", lambda e: self.set_verifier_filter("verified"))
+            sub_lbl = ctk.CTkLabel(
+                card,
+                text=label_text,
+                font=("Segoe UI", 9, "bold"),
+                text_color="#94A3B8"
+            )
+            sub_lbl.pack(pady=(0, 6))
 
-        self.verifier_lbl_unrec = ctk.CTkLabel(v_stats_inner, text="0 ❓ Unknown", font=("Segoe UI", 10, "bold"), text_color="#94A3B8", cursor="hand2")
-        self.verifier_lbl_unrec.pack(side="left", padx=(0, 15))
-        self.verifier_lbl_unrec.bind("<Button-1>", lambda e: self.set_verifier_filter("unrec"))
+            # Clicking anywhere on the tile sets the filter
+            card.bind("<Button-1>", lambda e, m=filter_mode: self.set_verifier_filter(m))
+            num_lbl.bind("<Button-1>", lambda e, m=filter_mode: self.set_verifier_filter(m))
+            sub_lbl.bind("<Button-1>", lambda e, m=filter_mode: self.set_verifier_filter(m))
 
-        self.btn_verifier_deselect_all = ctk.CTkButton(
-            v_stats_inner,
-            text="Deselect All",
-            width=75,
-            height=24,
-            font=("Segoe UI", 9, "bold"),
-            command=lambda: self.toggle_all_verifier_items(False)
+            return card, num_lbl, sub_lbl
+
+        self.metric_card_total, self.verifier_num_total, self.verifier_lbl_total = create_metric_tile(
+            self.v_hero_grid, "0", "TOTAL SCANNED", "#38BDF8", "all"
         )
-        self.btn_verifier_deselect_all.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_verifier_deselect_all)
-
-        self.btn_verifier_select_all = ctk.CTkButton(
-            v_stats_inner,
-            text="Select All",
-            width=65,
-            height=24,
-            font=("Segoe UI", 9, "bold"),
-            command=lambda: self.toggle_all_verifier_items(True)
+        self.metric_card_mismatch, self.verifier_num_mismatch, self.verifier_lbl_mismatch = create_metric_tile(
+            self.v_hero_grid, "0", "⚠️ DISCREPANCIES", "#FB7185", "mismatch"
         )
-        self.btn_verifier_select_all.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_verifier_select_all)
-
-        self.btn_vfilt_unrec = ctk.CTkButton(
-            v_stats_inner,
-            text="❓ Unknown",
-            width=75,
-            height=24,
-            font=("Segoe UI", 9, "bold"),
-            command=lambda: self.set_verifier_filter("unrec")
+        self.metric_card_covers, self.verifier_num_covers, self.verifier_lbl_covers = create_metric_tile(
+            self.v_hero_grid, "0", "🎭 COVERS", "#F59E0B", "covers"
         )
-        self.btn_vfilt_unrec.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_vfilt_unrec)
-
-        self.btn_vfilt_verified = ctk.CTkButton(
-            v_stats_inner,
-            text="✅ Verified",
-            width=70,
-            height=24,
-            font=("Segoe UI", 9, "bold"),
-            command=lambda: self.set_verifier_filter("verified")
+        self.metric_card_verified, self.verifier_num_verified, self.verifier_lbl_verified = create_metric_tile(
+            self.v_hero_grid, "0", "✅ VERIFIED", "#4ADE80", "verified"
         )
-        self.btn_vfilt_verified.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_vfilt_verified)
-
-        self.btn_vfilt_covers = ctk.CTkButton(
-            v_stats_inner,
-            text="🎭 Covers",
-            width=75,
-            height=24,
-            font=("Segoe UI", 9, "bold"),
-            command=lambda: self.set_verifier_filter("covers")
+        self.metric_card_unrec, self.verifier_num_unrec, self.verifier_lbl_unrec = create_metric_tile(
+            self.v_hero_grid, "0", "❓ UNKNOWN", "#94A3B8", "unrec"
         )
-        self.btn_vfilt_covers.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_vfilt_covers)
 
-        self.btn_vfilt_mismatch = ctk.CTkButton(
-            v_stats_inner,
-            text="⚠️ Mismatches",
-            width=88,
-            height=24,
+        # Filter & Action Control Row
+        v_actions_bar = ctk.CTkFrame(self.verifier_stats_card, fg_color="transparent")
+        v_actions_bar.pack(fill="x", padx=16, pady=(0, 10))
+
+        v_actions_left = ctk.CTkFrame(v_actions_bar, fg_color="transparent")
+        v_actions_left.pack(side="left", fill="x")
+
+        lbl_filter_prefix = ctk.CTkLabel(
+            v_actions_left,
+            text="FILTER:",
             font=("Segoe UI", 9, "bold"),
-            command=lambda: self.set_verifier_filter("mismatch")
+            text_color="#64748B"
         )
-        self.btn_vfilt_mismatch.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_vfilt_mismatch)
+        lbl_filter_prefix.pack(side="left", padx=(0, 6))
 
         self.btn_vfilt_all = ctk.CTkButton(
-            v_stats_inner,
+            v_actions_left,
             text="All",
-            width=45,
-            height=24,
+            width=50,
+            height=26,
+            corner_radius=6,
             font=("Segoe UI", 9, "bold"),
             command=lambda: self.set_verifier_filter("all")
         )
-        self.btn_vfilt_all.pack(side="right", padx=(4, 0))
-        self.theme_buttons_secondary.append(self.btn_vfilt_all)
+        self.btn_vfilt_all.pack(side="left", padx=3)
+
+        self.btn_vfilt_mismatch = ctk.CTkButton(
+            v_actions_left,
+            text="⚠️ Mismatches",
+            width=92,
+            height=26,
+            corner_radius=6,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("mismatch")
+        )
+        self.btn_vfilt_mismatch.pack(side="left", padx=3)
+
+        self.btn_vfilt_covers = ctk.CTkButton(
+            v_actions_left,
+            text="🎭 Covers",
+            width=80,
+            height=26,
+            corner_radius=6,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("covers")
+        )
+        self.btn_vfilt_covers.pack(side="left", padx=3)
+
+        self.btn_vfilt_verified = ctk.CTkButton(
+            v_actions_left,
+            text="✅ Verified",
+            width=80,
+            height=26,
+            corner_radius=6,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("verified")
+        )
+        self.btn_vfilt_verified.pack(side="left", padx=3)
+
+        self.btn_vfilt_unrec = ctk.CTkButton(
+            v_actions_left,
+            text="❓ Unknown",
+            width=82,
+            height=26,
+            corner_radius=6,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.set_verifier_filter("unrec")
+        )
+        self.btn_vfilt_unrec.pack(side="left", padx=3)
+
+        v_actions_right = ctk.CTkFrame(v_actions_bar, fg_color="transparent")
+        v_actions_right.pack(side="right")
+
+        self.btn_verifier_select_all = ctk.CTkButton(
+            v_actions_right,
+            text="Select All",
+            width=76,
+            height=26,
+            corner_radius=6,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.toggle_all_verifier_items(True)
+        )
+        self.btn_verifier_select_all.pack(side="left", padx=3)
+        self.theme_buttons_secondary.append(self.btn_verifier_select_all)
+
+        self.btn_verifier_deselect_all = ctk.CTkButton(
+            v_actions_right,
+            text="Deselect All",
+            width=82,
+            height=26,
+            corner_radius=6,
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self.toggle_all_verifier_items(False)
+        )
+        self.btn_verifier_deselect_all.pack(side="left", padx=3)
+        self.theme_buttons_secondary.append(self.btn_verifier_deselect_all)
 
         # Card 3: Scrollable Result List
         self.verifier_results_card = ctk.CTkFrame(self.verifier_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
@@ -2413,13 +2469,13 @@ class DownloaderApp(ctk.CTk):
         self.cd_stats_card.pack(fill="x", padx=20, pady=3)
 
         cd_stats_header = ctk.CTkFrame(self.cd_stats_card, fg_color="transparent")
-        cd_stats_header.pack(fill="x", padx=15, pady=(6, 2))
+        cd_stats_header.pack(fill="x", padx=15, pady=(8, 4))
 
         self.cd_capacity_lbl = ctk.CTkLabel(
             cd_stats_header,
-            text="Capacity: 0.0 MB / 700.0 MB (0.0% Full)",
+            text="💿 Audio CD Capacity: 0.0 MB / 700.0 MB (0.0% Full)",
             font=("Segoe UI", 11, "bold"),
-            text_color="#00E5FF",
+            text_color="#38BDF8",
             anchor="w"
         )
         self.cd_capacity_lbl.pack(side="left")
@@ -2436,22 +2492,22 @@ class DownloaderApp(ctk.CTk):
 
         self.cd_capacity_bar = ctk.CTkProgressBar(
             self.cd_stats_card,
-            height=10,
-            corner_radius=5,
-            progress_color="#00E5FF",
-            fg_color="#070F15"
+            height=12,
+            corner_radius=6,
+            progress_color="#38BDF8",
+            fg_color="#090E17"
         )
         self.cd_capacity_bar.set(0)
-        self.cd_capacity_bar.pack(fill="x", padx=15, pady=(2, 4))
+        self.cd_capacity_bar.pack(fill="x", padx=15, pady=(4, 6))
 
         self.cd_breakdown_lbl = ctk.CTkLabel(
             self.cd_stats_card,
             text="Seed: 0 tracks  •  Vibe: 0 tracks  •  Filler: 0 tracks",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 10),
             text_color="#94A3B8",
             anchor="w"
         )
-        self.cd_breakdown_lbl.pack(fill="x", padx=15, pady=(0, 6))
+        self.cd_breakdown_lbl.pack(fill="x", padx=15, pady=(0, 8))
 
         # Card 4: Mixtape Track Preview List
         self.cd_tracks_card = ctk.CTkFrame(self.cd_mixtape_page, fg_color="#0E1A24", corner_radius=12, border_color="#1F3A4E", border_width=1)
@@ -4864,9 +4920,9 @@ class DownloaderApp(ctk.CTk):
     def apply_theme(self, theme_name):
         themes = {
             "Midnight": {
-                "app_bg": "#0B0F17",
-                "card_bg": "#151B26",
-                "border": "#263042",
+                "app_bg": "#080D14",
+                "card_bg": "#0F172A",
+                "border": "#1E293B",
                 "border_width": 1,
                 "accent": "#38BDF8",
                 "text_primary": "#F8FAFC",
@@ -4877,16 +4933,17 @@ class DownloaderApp(ctk.CTk):
                 "btn_hover": "#2C3B52",
                 "status_text": "● READY",
                 "status_color": "#38BDF8",
-                "input_bg": "#0B0F17",
-                "input_border": "#263042",
+                "input_bg": "#090E17",
+                "input_border": "#1E293B",
                 "option_btn": "#1E293B",
-                "option_hover": "#2C3B52",
-                "option_bg": "#0B0F17",
-                "option_drop": "#151B26"
+                "option_hover": "#334155",
+                "option_bg": "#090E17",
+                "option_drop": "#0F172A",
+                "metric_card_bg": "#131C2E"
             },
             "Carbon": {
-                "app_bg": "#121214",
-                "card_bg": "#18181B",
+                "app_bg": "#0C0C0E",
+                "card_bg": "#16161A",
                 "border": "#27272A",
                 "border_width": 1,
                 "accent": "#10B981",
@@ -4898,33 +4955,35 @@ class DownloaderApp(ctk.CTk):
                 "btn_hover": "#3F3F46",
                 "status_text": "● READY",
                 "status_color": "#10B981",
-                "input_bg": "#121214",
+                "input_bg": "#0E0E11",
                 "input_border": "#27272A",
                 "option_btn": "#27272A",
                 "option_hover": "#3F3F46",
-                "option_bg": "#121214",
-                "option_drop": "#18181B"
+                "option_bg": "#0E0E11",
+                "option_drop": "#18181B",
+                "metric_card_bg": "#1D1D24"
             },
             "Nordic": {
-                "app_bg": "#0F172A",
-                "card_bg": "#1E293B",
-                "border": "#334155",
+                "app_bg": "#0B0F1A",
+                "card_bg": "#151D2E",
+                "border": "#25334A",
                 "border_width": 1,
                 "accent": "#818CF8",
                 "text_primary": "#F8FAFC",
                 "text_secondary": "#94A3B8",
-                "btn_bg": "#312E81",
+                "btn_bg": "#282D54",
                 "btn_border": "#818CF8",
                 "btn_text": "#818CF8",
-                "btn_hover": "#3730A3",
+                "btn_hover": "#373C70",
                 "status_text": "● READY",
                 "status_color": "#818CF8",
-                "input_bg": "#0F172A",
-                "input_border": "#334155",
-                "option_btn": "#334155",
-                "option_hover": "#475569",
-                "option_bg": "#0F172A",
-                "option_drop": "#1E293B"
+                "input_bg": "#0E1524",
+                "input_border": "#25334A",
+                "option_btn": "#25334A",
+                "option_hover": "#3A4B6B",
+                "option_bg": "#0E1524",
+                "option_drop": "#182236",
+                "metric_card_bg": "#1B253B"
             }
         }
         
@@ -4959,54 +5018,90 @@ class DownloaderApp(ctk.CTk):
                 border_color=cfg["border"], 
                 border_width=cfg["border_width"]
             )
+
+        for m_card in getattr(self, 'theme_metric_cards', []):
+            m_card.configure(
+                fg_color=cfg.get("metric_card_bg", cfg["card_bg"]),
+                border_color=cfg["border"],
+                border_width=1
+            )
+        self.update_verifier_filter_buttons()
             
         for title_lbl in self.theme_titles:
-            title_lbl.configure(text_color=cfg["text_primary"])
+            try:
+                if title_lbl.winfo_exists():
+                    title_lbl.configure(text_color=cfg["text_primary"])
+            except Exception:
+                pass
             
         for sec_lbl in self.theme_labels_secondary:
-            sec_lbl.configure(text_color=cfg["text_secondary"])
+            try:
+                if sec_lbl.winfo_exists():
+                    sec_lbl.configure(text_color=cfg["text_secondary"])
+            except Exception:
+                pass
             
         for entry in self.theme_entries:
-            entry.configure(
-                fg_color=cfg["input_bg"],
-                border_color=cfg["input_border"],
-                text_color="#F5F5F7",
-                placeholder_text_color=cfg["text_secondary"]
-            )
+            try:
+                if entry.winfo_exists():
+                    entry.configure(
+                        fg_color=cfg["input_bg"],
+                        border_color=cfg["input_border"],
+                        text_color="#F5F5F7",
+                        placeholder_text_color=cfg["text_secondary"]
+                    )
+            except Exception:
+                pass
             
         for menu in self.theme_option_menus:
-            menu.configure(
-                fg_color=cfg["input_bg"],
-                button_color=cfg["option_btn"],
-                button_hover_color=cfg["option_hover"],
-                dropdown_fg_color=cfg["option_drop"],
-                text_color="#F5F5F7",
-                dropdown_text_color="#F5F5F7",
-                dropdown_hover_color=cfg["input_border"]
-            )
+            try:
+                if menu.winfo_exists():
+                    menu.configure(
+                        fg_color=cfg["input_bg"],
+                        button_color=cfg["option_btn"],
+                        button_hover_color=cfg["option_hover"],
+                        dropdown_fg_color=cfg["option_drop"],
+                        text_color="#F5F5F7",
+                        dropdown_text_color="#F5F5F7",
+                        dropdown_hover_color=cfg["input_border"]
+                    )
+            except Exception:
+                pass
             
         for sw in self.theme_switches:
-            sw.configure(
-                progress_color=cfg["accent"],
-                text_color="#F5F5F7"
-            )
+            try:
+                if sw.winfo_exists():
+                    sw.configure(
+                        progress_color=cfg["accent"],
+                        text_color="#F5F5F7"
+                    )
+            except Exception:
+                pass
             
         for chk in [self.season_checkbox, self.range_checkbox]:
-            chk.configure(
-                fg_color=cfg["option_btn"],
-                hover_color=cfg["option_hover"],
-                checkmark_color=cfg["input_bg"],
-                text_color=cfg["text_secondary"]
-            )
+            try:
+                if chk.winfo_exists():
+                    chk.configure(
+                        fg_color=cfg["option_btn"],
+                        hover_color=cfg["option_hover"],
+                        checkmark_color=cfg["input_bg"],
+                        text_color=cfg["text_secondary"]
+                    )
+            except Exception:
+                pass
         
         for btn in self.theme_buttons_secondary:
-            btn.configure(
-                fg_color=cfg["input_bg"],
-                border_color=cfg["btn_border"],
-                border_width=1,
-                text_color=cfg["btn_text"],
-                hover_color=cfg["btn_hover"]
-            )
+            try:
+                if btn.winfo_exists():
+                    btn.configure(
+                        fg_color=cfg["input_bg"],
+                        border_color=cfg["btn_border"],
+                        border_width=1,
+                        text_color=cfg["btn_text"],
+                        hover_color=cfg["btn_hover"]
+                    )
+            except Exception:
+                pass
             
         self.download_button.configure(
             fg_color=cfg["btn_bg"],
@@ -5238,12 +5333,7 @@ class DownloaderApp(ctk.CTk):
         self.verifier_workers_lbl.configure(text="⚡ Active: Initializing worker threads...", text_color="#38BDF8")
         self.power_light.configure(text="● SCANNING", text_color=getattr(self, 'theme_cfg', {}).get("accent", "#00E5FF"))
 
-        self.verifier_lbl_total.configure(text="0 Scanned")
-        if hasattr(self, 'verifier_lbl_covers'):
-            self.verifier_lbl_covers.configure(text="0 🎭 Covers")
-        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Issues")
-        self.verifier_lbl_verified.configure(text="0 ✅ Verified")
-        self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
+        self.update_verifier_stat_counts(0, 0, 0, 0, 0)
 
         scan_start_time = time.time()
 
@@ -5331,12 +5421,13 @@ class DownloaderApp(ctk.CTk):
             if not force and (now - last_stat_label_time[0] < 0.3):
                 return
             last_stat_label_time[0] = now
-            self.verifier_lbl_total.configure(text=f"{stats_counts['total']} Scanned")
-            if hasattr(self, 'verifier_lbl_covers'):
-                self.verifier_lbl_covers.configure(text=f"{stats_counts['covers']} 🎭 Covers")
-            self.verifier_lbl_mismatch.configure(text=f"{stats_counts['issues']} ⚠️ Issues")
-            self.verifier_lbl_verified.configure(text=f"{stats_counts['verified']} ✅ Verified")
-            self.verifier_lbl_unrec.configure(text=f"{stats_counts['unknown']} ❓ Unknown")
+            self.update_verifier_stat_counts(
+                stats_counts['total'],
+                stats_counts['issues'],
+                stats_counts['covers'],
+                stats_counts['verified'],
+                stats_counts['unknown']
+            )
 
         def item_cb(res: dict):
             self.verifier_scan_results.append(res)
@@ -5438,6 +5529,30 @@ class DownloaderApp(ctk.CTk):
 
         self.render_verifier_results()
 
+    def update_verifier_stat_counts(self, tot: int = 0, mis: int = 0, cov: int = 0, ver: int = 0, unr: int = 0):
+        """ Updates both the bold numeric hero displays and the label texts """
+        if hasattr(self, 'verifier_num_total'):
+            self.verifier_num_total.configure(text=f"{tot:,}")
+        if hasattr(self, 'verifier_num_mismatch'):
+            self.verifier_num_mismatch.configure(text=f"{mis:,}")
+        if hasattr(self, 'verifier_num_covers'):
+            self.verifier_num_covers.configure(text=f"{cov:,}")
+        if hasattr(self, 'verifier_num_verified'):
+            self.verifier_num_verified.configure(text=f"{ver:,}")
+        if hasattr(self, 'verifier_num_unrec'):
+            self.verifier_num_unrec.configure(text=f"{unr:,}")
+
+        if hasattr(self, 'verifier_lbl_total'):
+            self.verifier_lbl_total.configure(text="TOTAL SCANNED")
+        if hasattr(self, 'verifier_lbl_mismatch'):
+            self.verifier_lbl_mismatch.configure(text="⚠️ DISCREPANCIES")
+        if hasattr(self, 'verifier_lbl_covers'):
+            self.verifier_lbl_covers.configure(text="🎭 COVERS")
+        if hasattr(self, 'verifier_lbl_verified'):
+            self.verifier_lbl_verified.configure(text="✅ VERIFIED")
+        if hasattr(self, 'verifier_lbl_unrec'):
+            self.verifier_lbl_unrec.configure(text="❓ UNKNOWN")
+
     def set_verifier_filter(self, mode: str):
         self.verifier_filter_mode = mode
         self.update_verifier_filter_buttons()
@@ -5445,28 +5560,56 @@ class DownloaderApp(ctk.CTk):
 
     def update_verifier_filter_buttons(self):
         cfg = getattr(self, 'theme_cfg', {})
-        active_bg = cfg.get("option_btn", "#028090")
-        inactive_bg = cfg.get("input_bg", "#070F15")
-        border = cfg.get("btn_border", "#1F3A4E")
+        active_bg = cfg.get("option_btn", "#1E293B")
+        inactive_bg = cfg.get("input_bg", "#090E17")
+        border = cfg.get("border", "#1E293B")
+        accent = cfg.get("accent", "#38BDF8")
 
         mode = self.verifier_filter_mode
         if hasattr(self, 'btn_vfilt_all'):
-            self.btn_vfilt_all.configure(fg_color=active_bg if mode == "all" else inactive_bg, border_color=cfg.get("accent", "#00E5FF") if mode == "all" else border)
-            self.btn_vfilt_covers.configure(fg_color="#78350F" if mode == "covers" else inactive_bg, border_color="#F59E0B" if mode == "covers" else border)
-            self.btn_vfilt_mismatch.configure(fg_color="#881337" if mode == "mismatch" else inactive_bg, border_color="#FB7185" if mode == "mismatch" else border)
-            self.btn_vfilt_verified.configure(fg_color="#064E3B" if mode == "verified" else inactive_bg, border_color="#34D399" if mode == "verified" else border)
-            self.btn_vfilt_unrec.configure(fg_color="#334155" if mode == "unrec" else inactive_bg, border_color="#94A3B8" if mode == "unrec" else border)
+            self.btn_vfilt_all.configure(
+                fg_color=accent if mode == "all" else inactive_bg,
+                text_color="#080D14" if mode == "all" else "#F8FAFC",
+                border_color=accent if mode == "all" else border,
+                border_width=1
+            )
+            self.btn_vfilt_mismatch.configure(
+                fg_color="#4C0519" if mode == "mismatch" else inactive_bg,
+                text_color="#FB7185" if mode == "mismatch" else "#94A3B8",
+                border_color="#FB7185" if mode == "mismatch" else border,
+                border_width=1
+            )
+            self.btn_vfilt_covers.configure(
+                fg_color="#451A03" if mode == "covers" else inactive_bg,
+                text_color="#F59E0B" if mode == "covers" else "#94A3B8",
+                border_color="#F59E0B" if mode == "covers" else border,
+                border_width=1
+            )
+            self.btn_vfilt_verified.configure(
+                fg_color="#064E3B" if mode == "verified" else inactive_bg,
+                text_color="#4ADE80" if mode == "verified" else "#94A3B8",
+                border_color="#4ADE80" if mode == "verified" else border,
+                border_width=1
+            )
+            self.btn_vfilt_unrec.configure(
+                fg_color="#1E293B" if mode == "unrec" else inactive_bg,
+                text_color="#CBD5E1" if mode == "unrec" else "#94A3B8",
+                border_color="#94A3B8" if mode == "unrec" else border,
+                border_width=1
+            )
+
+        if hasattr(self, 'metric_card_total'):
+            self.metric_card_total.configure(border_color=accent if mode == "all" else border, border_width=2 if mode == "all" else 1)
+            self.metric_card_mismatch.configure(border_color="#FB7185" if mode == "mismatch" else border, border_width=2 if mode == "mismatch" else 1)
+            self.metric_card_covers.configure(border_color="#F59E0B" if mode == "covers" else border, border_width=2 if mode == "covers" else 1)
+            self.metric_card_verified.configure(border_color="#4ADE80" if mode == "verified" else border, border_width=2 if mode == "verified" else 1)
+            self.metric_card_unrec.configure(border_color="#94A3B8" if mode == "unrec" else border, border_width=2 if mode == "unrec" else 1)
 
     def clear_verifier_cache(self):
         """ Clears persistent verification cache on disk """
         AudioFactChecker.clear_cache()
         self.verifier_scan_results = []
-        self.verifier_lbl_total.configure(text="0 Scanned")
-        if hasattr(self, 'verifier_lbl_covers'):
-            self.verifier_lbl_covers.configure(text="0 🎭 Covers")
-        self.verifier_lbl_mismatch.configure(text="0 ⚠️ Issues")
-        self.verifier_lbl_verified.configure(text="0 ✅ Verified")
-        self.verifier_lbl_unrec.configure(text="0 ❓ Unknown")
+        self.update_verifier_stat_counts(0, 0, 0, 0, 0)
         self.verifier_status_lbl.configure(text="✓ Verification cache cleared. Ready for fresh scan.", text_color="#4ADE80")
         self.log("[Fact-Checker] Persistent scan cache has been cleared.")
         self.render_verifier_results()
@@ -5799,12 +5942,7 @@ class DownloaderApp(ctk.CTk):
         mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
         ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
         unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
-        self.verifier_lbl_total.configure(text=f"{tot} Scanned")
-        if hasattr(self, 'verifier_lbl_covers'):
-            self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
-        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
-        self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
-        self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+        self.update_verifier_stat_counts(tot, mis, cov, ver, unr)
         self.verifier_status_lbl.configure(
             text=f"✓ Kept Current Tags: {res.get('filename')}",
             text_color="#4ADE80"
@@ -5845,12 +5983,7 @@ class DownloaderApp(ctk.CTk):
         mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
         ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
         unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
-        self.verifier_lbl_total.configure(text=f"{tot} Scanned")
-        if hasattr(self, 'verifier_lbl_covers'):
-            self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
-        self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
-        self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
-        self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+        self.update_verifier_stat_counts(tot, mis, cov, ver, unr)
         self.verifier_status_lbl.configure(
             text=f"✓ Marked {marked_count} tracks as Verified (Current tags kept)",
             text_color="#4ADE80"
@@ -6176,12 +6309,7 @@ class DownloaderApp(ctk.CTk):
             mis = sum(1 for r in self.verifier_scan_results if r.get("status") in ("MISMATCH", "COVER_DETECTED", "WRONG_TRACK", "METADATA_TYPO", "DURATION_MISMATCH"))
             ver = sum(1 for r in self.verifier_scan_results if r.get("status") == "VERIFIED")
             unr = sum(1 for r in self.verifier_scan_results if r.get("status") in ("UNRECOGNIZED", "TIMEOUT", "ERROR"))
-            self.verifier_lbl_total.configure(text=f"{tot} Scanned")
-            if hasattr(self, 'verifier_lbl_covers'):
-                self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
-            self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
-            self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
-            self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+            self.update_verifier_stat_counts(tot, mis, cov, ver, unr)
 
             self.verifier_status_lbl.configure(
                 text=f"📦 Quarantined: {os.path.basename(new_path)} -> _SORT_UNMATCHED",
@@ -6273,12 +6401,7 @@ class DownloaderApp(ctk.CTk):
                         state="normal",
                         text="📦 Move to _SORT"
                     )
-                self.verifier_lbl_total.configure(text=f"{tot} Scanned")
-                if hasattr(self, 'verifier_lbl_covers'):
-                    self.verifier_lbl_covers.configure(text=f"{cov} 🎭 Covers")
-                self.verifier_lbl_mismatch.configure(text=f"{mis} ⚠️ Issues")
-                self.verifier_lbl_verified.configure(text=f"{ver} ✅ Verified")
-                self.verifier_lbl_unrec.configure(text=f"{unr} ❓ Unknown")
+                self.update_verifier_stat_counts(tot, mis, cov, ver, unr)
                 self.verifier_progress_bar.set(1.0)
                 self.verifier_status_lbl.configure(
                     text=f"✓ Quarantined {moved_count} tracks into _SORT_UNMATCHED folder!",

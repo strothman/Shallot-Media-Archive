@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- upgrade canvas to 1120x720, add hero metric cards, and enhance theme elevation (1d06a75)
+
 ### Fixed
 - resolve false unknowns with Shazam 429 backoff, 1-worker overnight mode, and UI throttling (5ca1a03)
 
